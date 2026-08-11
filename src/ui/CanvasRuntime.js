@@ -291,9 +291,14 @@ export class CanvasRuntime {
     if (h.includes('s')) height = Math.max(24, d.height + dy);
     if (h.includes('n')) { height = Math.max(24, d.height - dy); top = d.top + d.height - height; }
     if (keepRatio) {
-      const next = Math.max(width / d.width, height / d.height);
-      width = Math.max(24, d.width * next);
-      height = Math.max(24, width / d.ratio);
+      // 区分主导方向：handle 含 e/w 以 width 为基准反推 height；仅含 n/s 则以 height 为基准反推 width
+      if (h.includes('e') || h.includes('w')) {
+        width = Math.max(24, width);
+        height = Math.max(24, width / d.ratio);
+      } else {
+        height = Math.max(24, height);
+        width = Math.max(24, height * d.ratio);
+      }
       if (h.includes('w')) left = d.left + d.width - width;
       if (h.includes('n')) top = d.top + d.height - height;
     }

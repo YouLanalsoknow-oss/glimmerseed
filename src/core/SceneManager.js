@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { DEFAULT_MATERIAL, TYPE_NAMES, TYPE_ICONS } from '../shared/constants.js';
 import { clone, dependencyName } from '../shared/utils.js';
-import { isValidTopology, writeTopologyToGeometry } from '../shared/topology.js';
+import { isValidTopology, writeTopologyToGeometry, buildTopologyGeometry } from '../shared/topology.js';
 import { isTextureUsedByAnyOther } from '../shared/textureUtils.js';
 
 /**
@@ -365,16 +365,8 @@ export class SceneManager {
   }
 
   _createExternalMesh(record) {
-    const topology = record?.topology;
-    if (!isValidTopology(topology)) return null;
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(topology.vertices.flat()), 3));
-    geo.setIndex(topology.indices);
-    if (topology.uv?.length === topology.vertices.length * 2) geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(topology.uv), 2));
-    this._applyTopologyGroups(geo, topology);
-    geo.computeVertexNormals();
-    geo.computeBoundingBox();
-    geo.computeBoundingSphere();
+    const geo = buildTopologyGeometry(record?.topology);
+    if (!geo) return null;
     const materialData = Array.isArray(record.material) ? record.material : [record.material || {}];
     const materials = materialData.map(item => new THREE.MeshStandardMaterial({
       color: item?.color || '#cccccc', metalness: item?.metalness ?? 0.1, roughness: item?.roughness ?? 0.7,
@@ -393,27 +385,6 @@ export class SceneManager {
     return mesh;
   }
 
-  _applyTopologyGroups(geometry, topology) {
-    geometry.clearGroups();
-    const indexCount = topology.indices.length;
-    if (Array.isArray(topology.materialIndices)) {
-      let current = null;
-      topology.materialIndices.forEach((materialIndex, faceId) => {
-        if (!current || current.materialIndex !== materialIndex) {
-          if (current) geometry.addGroup(current.start, current.count, current.materialIndex);
-          current = { start: faceId * 3, count: 3, materialIndex };
-        } else current.count += 3;
-      });
-      if (current) geometry.addGroup(current.start, Math.min(current.count, indexCount - current.start), current.materialIndex);
-      return;
-    }
-    (topology.groups || []).forEach(group => {
-      const start = Math.min(group.start, indexCount);
-      const count = Math.min(group.count, indexCount - start);
-      if (count > 0) geometry.addGroup(start, count, group.materialIndex);
-    });
-  }
-
   // ===== H1: 贴图资源恢复 =====
   /** 依据序列化材质中的 *MapResourceId 异步取回纹理并挂接到对应材质 */
   async _loadMaterialTexture(material, prop, resourceId) {
@@ -425,6 +396,8 @@ export class SceneManager {
     try {
       const texture = await new THREE.TextureLoader().loadAsync(url);
       texture.userData.resourceId = resourceId;
+      // L2: 赋值前释放同通道旧纹理，避免重复挂载泄漏 GPU 资源
+      if (material[prop]?.isTexture) material[prop].dispose();
       material[prop] = texture;
       material.needsUpdate = true;
     } catch (error) {
@@ -444,7 +417,9 @@ export class SceneManager {
       if (!node.material) return;
       const materials = Array.isArray(node.material) ? node.material : [node.material];
       materials.forEach((material, index) => {
-        const value = list[index] || list[0];
+        // L5: 该槽位串行化材质数 > list 长度时，跳过挂图避免与 list[0] 错配
+        if (index >= list.length) return;
+        const value = list[index] ?? list[0];
         if (!value || !material) return;
         tasks.push(this._loadMaterialTexture(material, 'map', value.mapResourceId));
         tasks.push(this._loadMaterialTexture(material, 'normalMap', value.normalMapResourceId));
@@ -472,157 +447,155 @@ export class SceneManager {
     this._suppressEvents = true;
     // Restore each object
     try {
-    for (const objData of data.objects) {
-      if (!objData || typeof objData !== 'object') continue;
-      let result = this.factory?.create(objData.type, objData.geometry || {}) || null;
-      if (!result && objData.sourceResourceId && this.resourceStore) {
-        const source = await this.resourceStore.get(objData.sourceResourceId).catch(() => null);
-        if (source?.blob) {
-          const url = URL.createObjectURL(source.blob);
-          try {
-            const ext = (objData.sourceName || source.name || '').toLowerCase().split('.').pop();
-            const dependencyUrls = new Map();
-            try {
-              for (const dependency of objData.sourceResources || []) {
-                const record = await this.resourceStore.get(dependency.id).catch(() => null);
-                if (record?.blob) dependencyUrls.set(dependencyName(dependency.name), URL.createObjectURL(record.blob));
-              }
-              if (ext === 'obj') {
-                const { OBJLoader } = await import('three/addons/loaders/OBJLoader.js');
-                const loader = new OBJLoader();
-                const mtl = (objData.sourceResources || []).find(item => /\.mtl$/i.test(item.name));
-                if (mtl) {
-                  const mtlUrl = dependencyUrls.get(dependencyName(mtl.name));
-                  if (mtlUrl) {
-                    const { MTLLoader } = await import('three/addons/loaders/MTLLoader.js');
-                    const materials = await new MTLLoader().loadAsync(mtlUrl);
-                    materials.preload();
-                    loader.setMaterials(materials);
-                  }
-                }
-                result = { mesh: await loader.loadAsync(url), data: { type: 'model' } };
-              } else {
-                const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
-                const loader = new GLTFLoader();
-                loader.setURLModifier(value => dependencyUrls.get(dependencyName(value)) || value);
-                const loaded = await loader.loadAsync(url);
-                result = { mesh: loaded.scene, data: { type: 'model' } };
-              }
-            } finally {
-              dependencyUrls.forEach(value => URL.revokeObjectURL(value));
-            }
-          } catch (error) {
-            console.warn('[SceneManager] source model restore failed:', error);
-          } finally {
-            URL.revokeObjectURL(url);
-          }
+      for (const objData of data.objects) {
+        if (!objData || typeof objData !== 'object') continue;
+        // M1: “重建 mesh”的多种来源拆分为独立小方法，按优先级串联，降低嵌套深度
+        const result = this._restoreFromFactory(objData)
+          || await this._restoreFromSource(objData)
+          || this._restoreFromExternalMeshes(objData)
+          || this._restoreFromTopology(objData);
+        if (!result) continue;
+        const { mesh, restoredExternal } = result;
+        if (restoredExternal) {
+          this._finalizeRestoredExternal(mesh, objData);
+          continue;
         }
-      }
-      const externalMeshes = objData.geometry?.meshes;
-      let restoredExternal = false;
-      if (!result && Array.isArray(externalMeshes) && externalMeshes.length) {
-        const group = new THREE.Group();
-        externalMeshes.forEach(record => {
-          const child = this._createExternalMesh(record);
-          if (child) {
-            group.add(child);
-            // H1: 依据 record.material[*].*MapResourceId 异步补挂贴图
-            this._attachMaterialTextures(child, record.material);
-          }
-        });
-        if (group.children.length) {
-          result = { mesh: group, data: { type: 'model' } };
-          restoredExternal = true;
-        }
-      }
-      // Fallback: reconstruct mesh from saved topology data (e.g. imported models)
-      if (!result) {
+        // 始终应用已保存的拓扑数据，不再检查顶点数是否匹配
+        // 编辑操作（挤出/环切/桥接）会改变顶点数，检查会导致编辑数据丢失
         const topology = objData.geometry?.topology;
         if (isValidTopology(topology)) {
-          const geo = new THREE.BufferGeometry();
-          geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(topology.vertices.flat()), 3));
-          geo.setIndex(topology.indices);
-          geo.computeVertexNormals();
-          geo.computeBoundingBox();
-          geo.computeBoundingSphere();
-          if (topology.uv?.length === topology.vertices.length * 2) {
-            geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(topology.uv), 2));
-          }
-          this._applyTopologyGroups(geo, topology);
-          const material = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.1, roughness: 0.7 });
-          const mesh = new THREE.Mesh(geo, material);
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
-          result = { mesh, data: { type: objData.type || 'model' } };
+          writeTopologyToGeometry(mesh.geometry, topology);
         }
-      }
-      if (!result) continue;
-      const { mesh, data: newData } = result;
-      if (restoredExternal) {
-        const transform = objData.transform;
-        mesh.name = objData.name || mesh.name || '导入模型';
-        if (transform) {
-          mesh.position.set(transform.position?.[0] ?? 0, transform.position?.[1] ?? 0, transform.position?.[2] ?? 0);
-          mesh.rotation.set(transform.rotation?.[0] ?? 0, transform.rotation?.[1] ?? 0, transform.rotation?.[2] ?? 0);
-          mesh.scale.set(transform.scale?.[0] ?? 1, transform.scale?.[1] ?? 1, transform.scale?.[2] ?? 1);
+        // Apply saved transform
+        const t = objData.transform;
+        if (t) {
+          mesh.position.set(t.position?.[0] ?? 0, t.position?.[1] ?? 0, t.position?.[2] ?? 0);
+          mesh.rotation.set(t.rotation?.[0] ?? 0, t.rotation?.[1] ?? 0, t.rotation?.[2] ?? 0);
+          mesh.scale.set(t.scale?.[0] ?? 1, t.scale?.[1] ?? 1, t.scale?.[2] ?? 1);
         }
-        mesh.traverse?.(child => {
-          if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
-        });
-        this.addExternalObject(mesh, clone(objData));
-        continue;
-      }
-      // 始终应用已保存的拓扑数据，不再检查顶点数是否匹配
-      // 编辑操作（挤出/环切/桥接）会改变顶点数，检查会导致编辑数据丢失
-      const topology = objData.geometry?.topology;
-      if (isValidTopology(topology)) {
-        const position = new Float32Array(topology.vertices.flat());
-        result.mesh.geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
-        result.mesh.geometry.setIndex(topology.indices);
-        result.mesh.geometry.computeVertexNormals();
-        result.mesh.geometry.computeBoundingBox();
-        result.mesh.geometry.computeBoundingSphere();
-        if (topology.uv?.length === topology.vertices.length * 2) {
-          result.mesh.geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(topology.uv), 2));
-        } else {
-          result.mesh.geometry.deleteAttribute('uv');
+        // Apply saved material
+        const mat = objData.material;
+        if (mat) {
+          const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+          materials.forEach((material, index) => {
+            // M2: 用 index 替代 indexOf（O(n²)→O(n)），用 ?? 替代 || 避免 falsy 值错误回退
+            const value = Array.isArray(mat) ? (mat[index] ?? mat[0]) : mat;
+            material.color?.set(value?.color || '#cccccc');
+            material.emissive?.set(value?.emissive || '#000000');
+            if ('emissiveIntensity' in material) material.emissiveIntensity = value?.emissiveIntensity ?? 1;
+            if ('metalness' in material) material.metalness = value?.metalness ?? 0.1;
+            if ('roughness' in material) material.roughness = value?.roughness ?? 0.7;
+            if ('opacity' in material) material.opacity = value?.opacity ?? 1;
+            if ('transparent' in material) material.transparent = Boolean(value?.transparent);
+            if ('depthWrite' in material) material.depthWrite = value?.depthWrite ?? true;
+            if (Number.isInteger(value?.side)) material.side = value.side;
+            if ('wireframe' in material) material.wireframe = Boolean(value?.wireframe);
+            material.needsUpdate = true;
+          });
         }
-        this._applyTopologyGroups(result.mesh.geometry, topology);
+        this.addObject(mesh, clone(objData));
+        // H1: 依据 objData.material[*].*MapResourceId 异步补挂贴图
+        this._attachMaterialTextures(mesh, objData.material);
       }
-      // Apply saved transform
-      const t = objData.transform;
-      if (t) {
-        mesh.position.set(t.position?.[0] ?? 0, t.position?.[1] ?? 0, t.position?.[2] ?? 0);
-        mesh.rotation.set(t.rotation?.[0] ?? 0, t.rotation?.[1] ?? 0, t.rotation?.[2] ?? 0);
-        mesh.scale.set(t.scale?.[0] ?? 1, t.scale?.[1] ?? 1, t.scale?.[2] ?? 1);
-      }
-      // Apply saved material
-      const mat = objData.material;
-      if (mat) {
-        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-        materials.forEach(material => {
-          const value = Array.isArray(mat) ? mat[materials.indexOf(material)] || mat[0] : mat;
-          material.color?.set(value?.color || '#cccccc');
-          material.emissive?.set(value?.emissive || '#000000');
-          if ('emissiveIntensity' in material) material.emissiveIntensity = value?.emissiveIntensity ?? 1;
-          if ('metalness' in material) material.metalness = value?.metalness ?? 0.1;
-          if ('roughness' in material) material.roughness = value?.roughness ?? 0.7;
-          if ('opacity' in material) material.opacity = value?.opacity ?? 1;
-          if ('transparent' in material) material.transparent = Boolean(value?.transparent);
-          if ('depthWrite' in material) material.depthWrite = value?.depthWrite ?? true;
-          if (Number.isInteger(value?.side)) material.side = value.side;
-          if ('wireframe' in material) material.wireframe = Boolean(value?.wireframe);
-          material.needsUpdate = true;
-        });
-      }
-      this.addObject(mesh, clone(objData));
-      // H1: 依据 objData.material[*].*MapResourceId 异步补挂贴图
-      this._attachMaterialTextures(mesh, objData.material);
-    }
     } finally {
       this._suppressEvents = prevSuppress;
       this.emit('scenechanged');
     }
+  }
+
+  /** M1: 来源1 — 由 geometryFactory 重建 */
+  _restoreFromFactory(objData) {
+    // 外部导入模型走 _restoreFromSource/_restoreFromExternalMeshes，提前返回避免打未知类型 warning
+    if (objData.type === 'model') return null;
+    return this.factory?.create(objData.type, objData.geometry || {}) || null;
+  }
+
+  /** M1: 来源2 — 由 sourceResourceId 加载原始模型（OBJ/GLTF） */
+  async _restoreFromSource(objData) {
+    if (!objData.sourceResourceId || !this.resourceStore) return null;
+    const source = await this.resourceStore.get(objData.sourceResourceId).catch(() => null);
+    if (!source?.blob) return null;
+    const url = URL.createObjectURL(source.blob);
+    try {
+      const ext = (objData.sourceName || source.name || '').toLowerCase().split('.').pop();
+      const dependencyUrls = new Map();
+      try {
+        for (const dependency of objData.sourceResources || []) {
+          const record = await this.resourceStore.get(dependency.id).catch(() => null);
+          if (record?.blob) dependencyUrls.set(dependencyName(dependency.name), URL.createObjectURL(record.blob));
+        }
+        if (ext === 'obj') {
+          const { OBJLoader } = await import('three/addons/loaders/OBJLoader.js');
+          const loader = new OBJLoader();
+          const mtl = (objData.sourceResources || []).find(item => /\.mtl$/i.test(item.name));
+          if (mtl) {
+            const mtlUrl = dependencyUrls.get(dependencyName(mtl.name));
+            if (mtlUrl) {
+              const { MTLLoader } = await import('three/addons/loaders/MTLLoader.js');
+              const materials = await new MTLLoader().loadAsync(mtlUrl);
+              materials.preload();
+              loader.setMaterials(materials);
+            }
+          }
+          return { mesh: await loader.loadAsync(url), data: { type: 'model' } };
+        }
+        const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
+        const loader = new GLTFLoader();
+        loader.setURLModifier(value => dependencyUrls.get(dependencyName(value)) || value);
+        const loaded = await loader.loadAsync(url);
+        return { mesh: loaded.scene, data: { type: 'model' } };
+      } finally {
+        dependencyUrls.forEach(value => URL.revokeObjectURL(value));
+      }
+    } catch (error) {
+      console.warn('[SceneManager] source model restore failed:', error);
+      return null;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  /** M1: 来源3 — 由 serialized meshes 重建外部模型 */
+  _restoreFromExternalMeshes(objData) {
+    const externalMeshes = objData.geometry?.meshes;
+    if (!Array.isArray(externalMeshes) || !externalMeshes.length) return null;
+    const group = new THREE.Group();
+    externalMeshes.forEach(record => {
+      const child = this._createExternalMesh(record);
+      if (child) {
+        group.add(child);
+        // H1: 依据 record.material[*].*MapResourceId 异步补挂贴图
+        this._attachMaterialTextures(child, record.material);
+      }
+    });
+    if (!group.children.length) return null;
+    return { mesh: group, data: { type: 'model' }, restoredExternal: true };
+  }
+
+  /** M1: 来源4 — 回退：由保存的 topology 重建网格（e.g. imported models） */
+  _restoreFromTopology(objData) {
+    const geo = buildTopologyGeometry(objData.geometry?.topology);
+    if (!geo) return null;
+    const material = new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.1, roughness: 0.7 });
+    const mesh = new THREE.Mesh(geo, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    return { mesh, data: { type: objData.type || 'model' } };
+  }
+
+  /** M1: external 模型恢复后的统一收尾（命名/变换/阴影/入场景） */
+  _finalizeRestoredExternal(mesh, objData) {
+    const transform = objData.transform;
+    mesh.name = objData.name || mesh.name || '导入模型';
+    if (transform) {
+      mesh.position.set(transform.position?.[0] ?? 0, transform.position?.[1] ?? 0, transform.position?.[2] ?? 0);
+      mesh.rotation.set(transform.rotation?.[0] ?? 0, transform.rotation?.[1] ?? 0, transform.rotation?.[2] ?? 0);
+      mesh.scale.set(transform.scale?.[0] ?? 1, transform.scale?.[1] ?? 1, transform.scale?.[2] ?? 1);
+    }
+    mesh.traverse?.(child => {
+      if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
+    });
+    this.addExternalObject(mesh, clone(objData));
   }
 
   // ===== Undo / Redo (command pattern) =====

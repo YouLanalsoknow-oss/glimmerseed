@@ -58,3 +58,18 @@ export function writeTopologyToGeometry(geometry, topology) {
   groups.forEach(group => geometry.addGroup(group.start, group.count, group.materialIndex));
   return groups;
 }
+
+/**
+ * 由拓扑数据构建一个新的 BufferGeometry（positions/indices/uv/groups + 法线与包围盒）。
+ * 抽自 _createExternalMesh 与 restoreSceneData topology 回退分支的重复代码，
+ * 内部复用 writeTopologyToGeometry 保证与既有写入逻辑行为一致。
+ *
+ * @param {*} topology 合法拓扑数据（不合法返回 null）
+ * @returns {THREE.BufferGeometry|null}
+ */
+export function buildTopologyGeometry(topology) {
+  if (!isValidTopology(topology)) return null;
+  const geometry = new THREE.BufferGeometry();
+  writeTopologyToGeometry(geometry, topology);
+  return geometry;
+}

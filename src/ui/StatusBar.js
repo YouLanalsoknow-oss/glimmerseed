@@ -3,12 +3,15 @@
  * 注意：模式（#statusMode）文本由 MeshEditController 统一持有并写入，
  * 此处不得覆盖，避免在拓扑编辑/框选模式下把状态冲掉。
  */
+import { schedule } from '../shared/throttleByRAF.js';
+
 export class StatusBar {
   constructor({ sceneManager, transformController, renderer }) {
     this.sceneManager = sceneManager;
     this.transformController = transformController;
     this.renderer = renderer;
-    this._updateRAF = 0;
+    // rAF 合并 — 同一帧内多次事件只执行一次 DOM 更新
+    this._scheduleUpdate = schedule(() => this.update());
   }
 
   init() {
@@ -20,16 +23,7 @@ export class StatusBar {
   dispose() {
     this._offScene?.(); this._offScene = null;
     this._offSelection?.(); this._offSelection = null;
-    if (this._updateRAF) { cancelAnimationFrame(this._updateRAF); this._updateRAF = 0; }
-  }
-
-  /** rAF 合并 — 同一帧内多次事件只执行一次 DOM 更新 */
-  _scheduleUpdate() {
-    if (this._updateRAF) return;
-    this._updateRAF = requestAnimationFrame(() => {
-      this._updateRAF = 0;
-      this.update();
-    });
+    this._scheduleUpdate.cancel?.();
   }
 
   update() {

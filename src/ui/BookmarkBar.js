@@ -358,6 +358,7 @@ export class BookmarkBar {
           const { OBJLoader } = await import('three/addons/loaders/OBJLoader.js');
           const loader = new OBJLoader();
           const mtl = files.find(item => /\.mtl$/i.test(item.name));
+          files.forEach(item => { if (item !== file) dependencyUrls.set(dependencyName(item.name), URL.createObjectURL(item)); });
           if (mtl) {
             const { MTLLoader } = await import('three/addons/loaders/MTLLoader.js');
             const mtlUrl = dependencyUrls.get(dependencyName(mtl.name));

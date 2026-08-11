@@ -356,19 +356,19 @@ export class MeshEditController {
 
   extrude(distance = 0) {
     const before = this._captureTopology();
-    if (this.session?.extrudeSelectedFaces(distance)) { this._syncGeometry(before); this._renderOverlay(); }
+    if (this.session?.extrudeSelectedFaces(distance)) { this._syncGeometry(before); this._renderOverlay(true); }
     else this._notifyEditFailure('请选择有效面，或当前拓扑无法挤出');
   }
 
   cutLoop() {
     const before = this._captureTopology();
-    if (this.mode === 'edge' && this.session?.cutEdgeLoop()) { this._syncGeometry(before); this._renderOverlay(); }
+    if (this.mode === 'edge' && this.session?.cutEdgeLoop()) { this._syncGeometry(before); this._renderOverlay(true); }
     else this._notifyEditFailure('请选择规则边环，环切无法跨越三角面或非流形区域');
   }
 
   bridge() {
     const before = this._captureTopology();
-    if (this.mode === 'edge' && this.session?.bridgeSelectedBoundaries()) { this._syncGeometry(before); this._renderOverlay(); }
+    if (this.mode === 'edge' && this.session?.bridgeSelectedBoundaries()) { this._syncGeometry(before); this._renderOverlay(true); }
     else this._notifyEditFailure('桥接需要两条顶点数量一致的边界环');
   }
 
@@ -387,7 +387,7 @@ export class MeshEditController {
   deleteSelected() {
     if (this.mode !== 'face') return;
     const before = this._captureTopology();
-    if (this.session?.deleteSelectedFaces()) { this._syncGeometry(before); this._renderOverlay(); }
+    if (this.session?.deleteSelectedFaces()) { this._syncGeometry(before); this._renderOverlay(true); }
     else this._notifyEditFailure('请选择要删除的面');
   }
 
@@ -417,16 +417,30 @@ export class MeshEditController {
     if (this.sceneManager?.redo()) { this._syncTarget(true); this._renderOverlay(); }
   }
 
-  _renderOverlay() {
-    this._clearOverlay(); if (!this.session) return;
+  /** 重建覆盖层。默认复用静态拓扑层（_vertexPoints/_edges）的 geometry，仅刷新 position；
+   *   选中集变化（单击/框选）时只重建"选中高亮层"（_selectedVertices/_selectedEdges/_selectedFaces）。
+   *   拓扑结构或模式变化时调用方可传 rebuildStatic=true 强制重建静态层。
+   *   拖拽/hover 的增量优化（_updateOverlayPositions / _updateHoverOnly）不受影响。 */
+  _renderOverlay(rebuildStatic = false) {
+    if (!this.session) { this._clearOverlay(); return; }
     const { vertices, edges, faces } = this.session.topology;
     const invalidEdges = new Set(this._diagnostic?.nonManifoldEdges || []);
-    const position = this._worldPositions(vertices);
+    const radius = this.session.mesh.geometry.boundingSphere?.radius || 1;
     if (this.mode === 'vertex') {
-      const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
-      const radius = this.session.mesh.geometry.boundingSphere?.radius || 1;
-      this._vertexPoints = new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0x6c5a91, size: Math.max(radius * 0.035, 0.025), sizeAttenuation: true, depthTest: false }));
-      this._vertexPoints.renderOrder = 20; this.overlay.add(this._vertexPoints);
+      // 模式从边/面切回顶点时，清理残留的静态边线层
+      if (this._edges) this._disposeStaticEdgeLayer();
+      // —— 静态拓扑层（顶点点集）：首帧创建后复用，仅刷新 position ——
+      if (!this._vertexPoints || rebuildStatic) {
+        if (this._vertexPoints) this._disposeStaticVertexLayer();
+        const position = this._worldPositions(vertices);
+        const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
+        this._vertexPoints = new THREE.Points(geometry, new THREE.PointsMaterial({ color: 0x6c5a91, size: Math.max(radius * 0.035, 0.025), sizeAttenuation: true, depthTest: false }));
+        this._vertexPoints.renderOrder = 20; this.overlay.add(this._vertexPoints);
+      } else {
+        this._writeStaticPositions(vertices, this._vertexPoints.geometry.attributes.position);
+      }
+      // —— 选中高亮层：选中集变化时只重建这一层 ——
+      this._disposeSelectedLayer();
       const selectedPositions = new Float32Array(this.session.selection.vertices.size * 3);
       let offset = 0;
       [...this.session.selection.vertices].forEach(id => { if (vertices[id]) { this._worldVertex(vertices[id], selectedPositions, offset); offset += 3; } });
@@ -434,11 +448,21 @@ export class MeshEditController {
       this._selectedVertices.geometry.setAttribute('position', new THREE.Float32BufferAttribute(selectedPositions, 3));
       this._selectedVertices.renderOrder = 21; this.overlay.add(this._selectedVertices);
     } else {
-      const edgePositions = new Float32Array(edges.length * 6);
-      edges.forEach((edge, i) => { edge.vertices.forEach((id, n) => this._worldVertex(vertices[id], edgePositions, i * 6 + n * 3)); });
-      const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(edgePositions, 3));
-      this._edges = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: 0x6c5a91, depthTest: false, transparent: true, opacity: 0.9 }));
-      this._edges.renderOrder = 20; this.overlay.add(this._edges);
+      // 模式从顶点切到边/面时，清理残留的静态顶点层
+      if (this._vertexPoints) this._disposeStaticVertexLayer();
+      // —— 静态拓扑层（边线）：首帧创建后复用，仅刷新 position ——
+      if (!this._edges || rebuildStatic) {
+        if (this._edges) this._disposeStaticEdgeLayer();
+        const edgePositions = new Float32Array(edges.length * 6);
+        edges.forEach((edge, i) => { edge.vertices.forEach((id, n) => this._worldVertex(vertices[id], edgePositions, i * 6 + n * 3)); });
+        const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(edgePositions, 3));
+        this._edges = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: 0x6c5a91, depthTest: false, transparent: true, opacity: 0.9 }));
+        this._edges.renderOrder = 20; this.overlay.add(this._edges);
+      } else {
+        this._writeStaticEdgePositions(edges, vertices, this._edges.geometry.attributes.position);
+      }
+      // —— 选中高亮层：选中集变化时只重建这一层 ——
+      this._disposeSelectedLayer();
       this._selectedEdges = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xd18b53, depthTest: false, linewidth: 2 }));
       const selectedPositions = new Float32Array(this.session.selection.edges.size * 6);
       let offset = 0;
@@ -451,30 +475,76 @@ export class MeshEditController {
       this._selectedEdges.renderOrder = 21; this.overlay.add(this._selectedEdges);
       if (this.mode === 'face' && this.session.selection.faces.size > 0) {
         const facePositions = new Float32Array(this.session.selection.faces.size * 9);
-        let offset = 0;
+        let offset2 = 0;
         this.session.selection.faces.forEach(faceId => {
           const face = faces[faceId];
-          if (face) face.vertices.forEach(vId => { if (vertices[vId]) { this._worldVertex(vertices[vId], facePositions, offset); offset += 3; } });
+          if (face) face.vertices.forEach(vId => { if (vertices[vId]) { this._worldVertex(vertices[vId], facePositions, offset2); offset2 += 3; } });
         });
-        if (offset) {
+        if (offset2) {
           const faceGeo = new THREE.BufferGeometry();
-          faceGeo.setAttribute('position', new THREE.Float32BufferAttribute(facePositions.subarray(0, offset), 3));
+          faceGeo.setAttribute('position', new THREE.Float32BufferAttribute(facePositions.subarray(0, offset2), 3));
           this._selectedFaces = new THREE.Mesh(faceGeo, new THREE.MeshBasicMaterial({ color: 0xd18b53, transparent: true, opacity: 0.35, depthTest: false, side: THREE.DoubleSide }));
           this._selectedFaces.renderOrder = 19; this.overlay.add(this._selectedFaces);
         }
       }
+      // —— 错误边：诊断变化时重建 ——
+      this._disposeErrorEdges();
       if (invalidEdges.size) {
         const errorPositions = new Float32Array(invalidEdges.size * 6);
-        let offset = 0;
-        invalidEdges.forEach(id => edges[id]?.vertices.forEach(vertexId => { if (vertices[vertexId]) { this._worldVertex(vertices[vertexId], errorPositions, offset); offset += 3; } }));
+        let offset3 = 0;
+        invalidEdges.forEach(id => edges[id]?.vertices.forEach(vertexId => { if (vertices[vertexId]) { this._worldVertex(vertices[vertexId], errorPositions, offset3); offset3 += 3; } }));
         const errorGeometry = new THREE.BufferGeometry();
-        errorGeometry.setAttribute('position', new THREE.Float32BufferAttribute(errorPositions.subarray(0, offset), 3));
+        errorGeometry.setAttribute('position', new THREE.Float32BufferAttribute(errorPositions.subarray(0, offset3), 3));
         this._errorEdges = new THREE.LineSegments(errorGeometry, new THREE.LineBasicMaterial({ color: 0xc55f64, depthTest: false, linewidth: 3 }));
         this._errorEdges.renderOrder = 22; this.overlay.add(this._errorEdges);
       }
     }
+    this._disposeHoverElement();
     this._createHoverElement();
     this.sceneManager?.emit('topologyoverlay');
+  }
+
+  /** 仅释放选中高亮层对象，保留静态拓扑层以复用 geometry */
+  _disposeSelectedLayer() {
+    this._selectedVertices?.geometry.dispose(); this._selectedVertices?.material.dispose();
+    this._selectedEdges?.geometry.dispose(); this._selectedEdges?.material.dispose();
+    this._selectedFaces?.geometry.dispose(); this._selectedFaces?.material.dispose();
+    if (this._selectedVertices) this.overlay.remove(this._selectedVertices);
+    if (this._selectedEdges) this.overlay.remove(this._selectedEdges);
+    if (this._selectedFaces) this.overlay.remove(this._selectedFaces);
+    this._selectedVertices = null; this._selectedEdges = null; this._selectedFaces = null;
+  }
+
+  _disposeErrorEdges() {
+    this._errorEdges?.geometry.dispose(); this._errorEdges?.material.dispose();
+    if (this._errorEdges) this.overlay.remove(this._errorEdges);
+    this._errorEdges = null;
+  }
+
+  _disposeStaticVertexLayer() {
+    this._vertexPoints?.geometry.dispose(); this._vertexPoints?.material.dispose();
+    if (this._vertexPoints) this.overlay.remove(this._vertexPoints);
+    this._vertexPoints = null;
+  }
+
+  _disposeStaticEdgeLayer() {
+    this._edges?.geometry.dispose(); this._edges?.material.dispose();
+    if (this._edges) this.overlay.remove(this._edges);
+    this._edges = null;
+  }
+
+  /** 复用静态顶点点集 geometry，仅写入 position 数组并标记 needsUpdate */
+  _writeStaticPositions(vertices, attr) {
+    const arr = attr.array;
+    vertices.forEach((vertex, index) => this._worldVertex(vertex, arr, index * 3));
+    attr.needsUpdate = true;
+  }
+
+  /** 复用静态边线 geometry，仅写入 position 数组并标记 needsUpdate */
+  _writeStaticEdgePositions(edges, vertices, attr) {
+    const arr = attr.array;
+    edges.forEach((edge, i) => { edge.vertices.forEach((id, n) => this._worldVertex(vertices[id], arr, i * 6 + n * 3)); });
+    attr.needsUpdate = true;
   }
 
   /** 仅更新悬停元素 — hover 变化时不重建全部覆盖层，大幅减少 GC 压力 */

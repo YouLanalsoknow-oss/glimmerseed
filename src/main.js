@@ -14,6 +14,7 @@ import { BookmarkBar } from './ui/BookmarkBar.js';
 import { Inspector } from './ui/Inspector.js';
 import { Outline } from './ui/Outline.js';
 import { StatusBar } from './ui/StatusBar.js';
+import { schedule } from './shared/throttleByRAF.js';
 
 async function main() {
   const canvas = document.getElementById('renderCanvas');
@@ -98,7 +99,6 @@ async function main() {
   }
 
   // ===== 窗口缩放 — rAF 节流，避免高频 resize 卡顿 =====
-  let _resizeRAF = 0;
   function resize() {
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -106,13 +106,7 @@ async function main() {
     viewport.resize(w, h);
     markDirty();
   }
-  function scheduleResize() {
-    if (_resizeRAF) return;
-    _resizeRAF = requestAnimationFrame(() => {
-      _resizeRAF = 0;
-      resize();
-    });
-  }
+  const scheduleResize = schedule(() => resize());
   window.addEventListener('resize', scheduleResize);
   resize();
 
@@ -178,7 +172,10 @@ async function main() {
       needsRender = false;
     }
 
-    if (controlsChanged || needsRender) {
+    // 仅依赖 controlsChanged：needsRender 在本帧已被置 false，恒为 false；
+    // 相机阻尼在动画期间持续派发 change 事件（markDirty 置 needRender），
+    // 故 change 事件链已保证 dirty 状态能持续保持渲染循环。
+    if (controlsChanged) {
       _rafId = requestAnimationFrame(animate);
     } else {
       _loopRunning = false;
@@ -210,7 +207,7 @@ async function main() {
     persistence.flush(sceneManager, viewport, bookmarkBar.canvasRuntime).catch(error => console.error('[Main] final save failed:', error));
     _loopRunning = false;
     cancelAnimationFrame(_rafId);
-    if (_resizeRAF) cancelAnimationFrame(_resizeRAF);
+    scheduleResize.cancel?.();
     window.removeEventListener('resize', scheduleResize);
     document.removeEventListener('keydown', onKeyDown);
     document.removeEventListener('visibilitychange', onVisibilityChange);

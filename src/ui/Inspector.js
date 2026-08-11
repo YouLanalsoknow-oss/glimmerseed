@@ -2,6 +2,7 @@ import { SceneManager } from '../core/SceneManager.js';
 import { DEFAULT_MATERIAL } from '../shared/constants.js';
 import { UpdateObjectCommand } from '../core/Commands.js';
 import { clone } from '../shared/utils.js';
+import { schedule } from '../shared/throttleByRAF.js';
 
 const RAD2DEG = 180 / Math.PI;
 const DEG2RAD = Math.PI / 180;
@@ -14,7 +15,7 @@ export class Inspector {
   constructor({ sceneManager }) {
     this.sceneManager = sceneManager;
     this._currentId = null;
-    this._updateRAF = 0;       // rAF 节流标记
+    this._scheduleUpdate = schedule(() => this._updateValues());  // rAF 合并 — 同一帧内多次 objectchanged 只执行一次 DOM 更新
     this._transformInputs = null;  // 缓存 DOM 引用，避免每帧 querySelectorAll
     this._beforeSnapshot = null;   // M6: 输入开始时快照，失焦/change 时提交 UpdateObjectCommand
   }
@@ -29,16 +30,7 @@ export class Inspector {
   dispose() {
     this._offSelection?.(); this._offSelection = null;
     this._offObjectChanged?.(); this._offObjectChanged = null;
-    if (this._updateRAF) { cancelAnimationFrame(this._updateRAF); this._updateRAF = 0; }
-  }
-
-  /** rAF 合并 — 同一帧内多次 objectchanged 只执行一次 DOM 更新 */
-  _scheduleUpdate() {
-    if (this._updateRAF) return;
-    this._updateRAF = requestAnimationFrame(() => {
-      this._updateRAF = 0;
-      this._updateValues();
-    });
+    this._scheduleUpdate.cancel?.();
   }
 
   render() {
@@ -65,27 +57,27 @@ export class Inspector {
       <div class="field-group">
         <div class="field-group-title">位置</div>
         <div class="field-row">
-          <div class="field"><label>X</label><input type="number" step="0.1" data-t="position" data-axis="0" value="${fmt(t.position[0])}"></div>
-          <div class="field"><label>Y</label><input type="number" step="0.1" data-t="position" data-axis="1" value="${fmt(t.position[1])}"></div>
-          <div class="field"><label>Z</label><input type="number" step="0.1" data-t="position" data-axis="2" value="${fmt(t.position[2])}"></div>
+          <div class="field"><label>X</label><input type="number" step="0.1" data-t="position" data-axis="0" value="${fmt(t.position?.[0] ?? 0)}"></div>
+          <div class="field"><label>Y</label><input type="number" step="0.1" data-t="position" data-axis="1" value="${fmt(t.position?.[1] ?? 0)}"></div>
+          <div class="field"><label>Z</label><input type="number" step="0.1" data-t="position" data-axis="2" value="${fmt(t.position?.[2] ?? 0)}"></div>
         </div>
       </div>
 
       <div class="field-group">
         <div class="field-group-title">旋转 (度)</div>
         <div class="field-row">
-          <div class="field"><label>X</label><input type="number" step="1" data-t="rotation" data-axis="0" value="${fmt((t.rotation[0] || 0) * RAD2DEG)}"></div>
-          <div class="field"><label>Y</label><input type="number" step="1" data-t="rotation" data-axis="1" value="${fmt((t.rotation[1] || 0) * RAD2DEG)}"></div>
-          <div class="field"><label>Z</label><input type="number" step="1" data-t="rotation" data-axis="2" value="${fmt((t.rotation[2] || 0) * RAD2DEG)}"></div>
+          <div class="field"><label>X</label><input type="number" step="1" data-t="rotation" data-axis="0" value="${fmt((t.rotation?.[0] ?? 0) * RAD2DEG)}"></div>
+          <div class="field"><label>Y</label><input type="number" step="1" data-t="rotation" data-axis="1" value="${fmt((t.rotation?.[1] ?? 0) * RAD2DEG)}"></div>
+          <div class="field"><label>Z</label><input type="number" step="1" data-t="rotation" data-axis="2" value="${fmt((t.rotation?.[2] ?? 0) * RAD2DEG)}"></div>
         </div>
       </div>
 
       <div class="field-group">
         <div class="field-group-title">缩放</div>
         <div class="field-row">
-          <div class="field"><label>X</label><input type="number" step="0.1" data-t="scale" data-axis="0" value="${fmt(t.scale[0])}"></div>
-          <div class="field"><label>Y</label><input type="number" step="0.1" data-t="scale" data-axis="1" value="${fmt(t.scale[1])}"></div>
-          <div class="field"><label>Z</label><input type="number" step="0.1" data-t="scale" data-axis="2" value="${fmt(t.scale[2])}"></div>
+          <div class="field"><label>X</label><input type="number" step="0.1" data-t="scale" data-axis="0" value="${fmt(t.scale?.[0] ?? 0)}"></div>
+          <div class="field"><label>Y</label><input type="number" step="0.1" data-t="scale" data-axis="1" value="${fmt(t.scale?.[1] ?? 0)}"></div>
+          <div class="field"><label>Z</label><input type="number" step="0.1" data-t="scale" data-axis="2" value="${fmt(t.scale?.[2] ?? 0)}"></div>
         </div>
       </div>
 
@@ -228,7 +220,7 @@ export class Inspector {
         if (document.activeElement === input) return;
         const type = input.dataset.t;
         const axis = parseInt(input.dataset.axis);
-        let val = t[type][axis] || 0;
+        let val = t[type]?.[axis] ?? 0;
         if (type === 'rotation') {
           // 显示时归一化到 [-180, 180] 度
           val = (((val * RAD2DEG) % 360) + 540) % 360 - 180;
