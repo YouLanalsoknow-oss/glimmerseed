@@ -13,7 +13,7 @@
   }
 }
 </script>
-<script src="./node_modules/ag-psd/dist/bundle.js"></script>
+<script src="./node_modules/ag-psd/dist/bundle.js" defer></script>
 </head>
 <body>
 
@@ -30,7 +30,7 @@
   <div class="bookmark-divider"></div>
   <div class="bookmark-group concept-group" id="conceptBookmarks"></div>
   <div class="spacer"></div>
-  <span class="save-status" id="saveStatus">已保存</span>
+  <span class="save-status" id="saveStatus" aria-live="polite">已保存</span>
 </header>
 
 <!-- ===== Sticky Note: Outline ===== -->
@@ -74,7 +74,7 @@
 </div>
 
 <!-- ===== Status — floating, minimal ===== -->
-<div class="status-floating">
+<div class="status-floating" aria-live="polite">
   <span class="status-item" id="statusObjects">物体: 0</span>
   <span class="status-sep">·</span>
   <span class="status-item" id="statusSelection">未选中</span>

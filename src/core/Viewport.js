@@ -101,7 +101,11 @@ export class Viewport {
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(size.x, size.y, size.z, 0.5);
     const distance = radius * padding / Math.tan((this.camera.fov * Math.PI / 180) / 2);
-    const direction = this.camera.position.clone().sub(this.controls.target).normalize();
+    // 相机与 target 重合时方向向量为 (0,0,0)，normalize 后相机会被乘回 center；
+    // 此时回退到默认观察方向 (0,0,1)，保证 focusObject 仍能把相机放到合理位置。
+    const direction = this.camera.position.clone().sub(this.controls.target);
+    if (direction.lengthSq() < 1e-8) direction.set(0, 0, 1);
+    else direction.normalize();
     this.controls.target.copy(center);
     this.camera.position.copy(center).add(direction.multiplyScalar(distance));
     this.controls.update();

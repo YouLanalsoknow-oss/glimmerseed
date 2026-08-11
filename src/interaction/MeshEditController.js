@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { MeshEditSession } from './MeshEditSession.js';
 import { TopologyEditCommand } from '../core/Commands.js';
+import { MODE_NAMES } from '../shared/constants.js';
 
 /** 网格编辑协调器：负责会话、拾取覆盖层和对象级控制器切换。 */
 export class MeshEditController {
@@ -25,6 +26,10 @@ export class MeshEditController {
     this._boxElement = null;
     this._hoverIndex = -1;
     this._orbitWasEnabled = undefined;
+    // 顶部状态栏模式提示的恢复状态（L2：单一版本号，仅最新一次恢复原文案）
+    this._toastVersion = 0;
+    this._toastRestoreText = null;
+    this._toastTimer = 0;
   }
 
   init(renderer, viewport, sceneManager, transformController) {
@@ -130,6 +135,15 @@ export class MeshEditController {
   _setStatus(message) {
     const status = document.getElementById('statusMode');
     if (status) status.textContent = message;
+  }
+
+  /**
+   * 切换普通变换模式（移动/旋转/缩放）时的统一状态入口。
+   * #statusMode 的文本写入权归本控制器统一持有，外部（如 BookmarkBar）切换
+   * 变换模式时请调用本方法，而不是直接写 DOM，避免与拓扑/框选状态互相覆盖。
+   */
+  setTransformMode(mode) {
+    this._setStatus(`${MODE_NAMES[mode] || mode}模式`);
   }
 
   _onDown(event) {
@@ -380,10 +394,20 @@ export class MeshEditController {
   _notifyEditFailure(message) {
     const status = document.getElementById('statusMode');
     if (!status) return;
-    const previous = status.textContent;
+    // 首次提示时记录原文案；短间隔多次提示只更新文本，不改变恢复目标。
+    // 用单一版本号 token，仅有最新一次 setTimeout 到期时恢复原文案，避免竞态覆盖。
+    if (this._toastVersion === 0) {
+      this._toastRestoreText = status.textContent;
+    }
     status.textContent = message;
-    clearTimeout(this._failureTimer);
-    this._failureTimer = setTimeout(() => { if (status.isConnected) status.textContent = previous; }, 2800);
+    const version = ++this._toastVersion;
+    clearTimeout(this._toastTimer);
+    this._toastTimer = setTimeout(() => {
+      if (!status.isConnected || version !== this._toastVersion) return;
+      status.textContent = this._toastRestoreText;
+      this._toastVersion = 0;
+      this._toastRestoreText = null;
+    }, 2800);
   }
 
   undo() {
@@ -559,6 +583,8 @@ export class MeshEditController {
   }
 
   dispose() {
+    clearTimeout(this._toastTimer);
+    this._toastTimer = 0;
     this._clearOverlay(); this._removeBoxVisual(); this.transformController?.setTopologyEditing(false);
     this._offSelection?.(); this._offSelection = null;
     this.renderer?.domElement.removeEventListener('pointerdown', this._down);

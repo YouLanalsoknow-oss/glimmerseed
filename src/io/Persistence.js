@@ -289,12 +289,13 @@ export class Persistence {
     } catch (err) {
       console.error('[Persistence] clear failed:', err);
     }
-    // 同时清空 IndexedDB 资源
+    // 同时清空 IndexedDB 资源 — 返回等待所有 delete 完成的 Promise，供调用方 await
     if (this._resourceStore) {
-      this._resourceStore.list().then(records => {
-        Promise.all(records.map(r => this._resourceStore.delete(r.id))).catch(() => {});
-      }).catch(() => {});
+      return this._resourceStore.list()
+        .then(records => Promise.all(records.map(r => this._resourceStore.delete(r.id))))
+        .catch(() => {});
     }
+    return Promise.resolve();
   }
 
   hasSavedData() {

@@ -1,7 +1,7 @@
-import { MODE_NAMES } from '../shared/constants.js';
-
 /**
- * 界面层 — 状态栏：物体数、选中信息、变换模式、渲染后端
+ * 界面层 — 状态栏：物体数、选中信息、渲染后端
+ * 注意：模式（#statusMode）文本由 MeshEditController 统一持有并写入，
+ * 此处不得覆盖，避免在拓扑编辑/框选模式下把状态冲掉。
  */
 export class StatusBar {
   constructor({ sceneManager, transformController, renderer }) {
@@ -35,7 +35,6 @@ export class StatusBar {
   update() {
     const objCount = document.getElementById('statusObjects');
     const selEl = document.getElementById('statusSelection');
-    const modeEl = document.getElementById('statusMode');
     const backendEl = document.getElementById('statusBackend');
 
     if (objCount) objCount.textContent = `物体: ${this.sceneManager.count}`;
@@ -49,10 +48,6 @@ export class StatusBar {
       } else {
         selEl.textContent = `已选 ${selected.length} 个对象`;
       }
-    }
-
-    if (modeEl) {
-      modeEl.textContent = `${MODE_NAMES[this.transformController.mode] || ''}模式`;
     }
 
     if (backendEl) {

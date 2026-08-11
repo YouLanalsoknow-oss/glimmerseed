@@ -19,12 +19,18 @@ export class CanvasRuntime {
     this.onChange = null;
     this.resourceStore = resourceStore;
     this._resourceUrls = new Map();
+    this._canvasOverlay = null;   // L6: 缓存 canvasOverlay 引用，避免每次 keydown 查询
+    this._notifyToken = 0;        // L2: 状态提示版本号，仅最新一次恢复旧文案
+    this._notifyPrevious = null;  // L2: 同一批提示开始前的原始文案
   }
 
   init(viewport, page) {
     this.viewport = viewport;
     this.page = page;
     if (!viewport || !page) return this;
+
+    // L6: init 时缓存 overlay 引用，之后复用
+    this._canvasOverlay = document.getElementById('canvasOverlay');
 
     this._onPointerDown = (e) => this._pointerDown(e);
     this._onPointerMove = (e) => this._pointerMove(e);
@@ -192,9 +198,19 @@ export class CanvasRuntime {
   notify(message) {
     const status = document.getElementById('saveStatus');
     if (!status) return;
-    const previous = status.textContent;
+    // 仅在本次提示为一批的开始（无挂起 token）时记录初始文案
+    const isFirst = this._notifyToken === 0;
+    const previous = isFirst ? status.textContent : this._notifyPrevious;
+    const token = (this._notifyToken += 1);
+    if (isFirst) this._notifyPrevious = previous;
     status.textContent = message;
-    setTimeout(() => { if (status.isConnected) status.textContent = previous; }, 2600);
+    setTimeout(() => {
+      // L2: 仅最新一次提示恢复旧文案，避免短间隔提示互相覆盖
+      if (token !== this._notifyToken) return;
+      this._notifyToken = 0;
+      this._notifyPrevious = null;
+      if (status.isConnected) status.textContent = previous;
+    }, 2600);
   }
 
   _pointerDown(event) {
@@ -597,7 +613,11 @@ export class CanvasRuntime {
     this._handles = [];
   }
 
-  _isVisible() { return !document.getElementById('canvasOverlay')?.classList.contains('hidden'); }
+  // L6: 复用 init 时缓存的引用；若 init 时尚未存在则按需查询并缓存
+  _isVisible() {
+    const overlay = this._canvasOverlay || (this._canvasOverlay = document.getElementById('canvasOverlay'));
+    return !overlay?.classList.contains('hidden');
+  }
 
   dispose() {
     this.drag = null;

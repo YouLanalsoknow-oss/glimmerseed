@@ -200,7 +200,15 @@ export class Inspector {
     if (!obj) return;
     const t = obj.data.transform;
     let val = parseFloat(input.value) || 0;
-    if (type === 'rotation') val *= DEG2RAD;
+    if (type === 'scale') {
+      // 缩放钳制到 [0.001, 1000]，避免 0/负缩放导致网格缩放为 0 不可见
+      val = Math.min(1000, Math.max(0.001, val));
+      input.value = String(val);
+    } else if (type === 'rotation') {
+      // 归一化到 [-180, 180] 度
+      val = (((val % 360) + 540) % 360) - 180;
+      val *= DEG2RAD;
+    }
     const arr = [...t[type]];
     arr[axis] = val;
     this.sceneManager.updateTransform(this._currentId, { [type]: arr });
@@ -221,7 +229,13 @@ export class Inspector {
         const type = input.dataset.t;
         const axis = parseInt(input.dataset.axis);
         let val = t[type][axis] || 0;
-        if (type === 'rotation') val *= RAD2DEG;
+        if (type === 'rotation') {
+          // 显示时归一化到 [-180, 180] 度
+          val = (((val * RAD2DEG) % 360) + 540) % 360 - 180;
+        } else if (type === 'scale') {
+          // 显示时保持一致钳制，避免输入被外力改写为非法缩放
+          val = Math.min(1000, Math.max(0.001, val));
+        }
         input.value = fmt(val);
       });
     }

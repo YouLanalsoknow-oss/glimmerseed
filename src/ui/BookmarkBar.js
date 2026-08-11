@@ -1,8 +1,10 @@
 import { BookmarkSystem } from './BookmarkSystem.js';
 import { AddObjectCommand, AddExternalObjectCommand, RemoveObjectCommand } from '../core/Commands.js';
 import { CanvasRuntime } from './CanvasRuntime.js';
-import { MODE_NAMES } from '../shared/constants.js';
 import { dependencyName } from '../shared/utils.js';
+
+/** 单次模型导入的最大文件大小（200MB），超出时拒绝导入 */
+const _MAX_IMPORT_SIZE = 200 * 1024 * 1024;
 
 /**
  * 界面层 — 书签条：渲染常驻/概念书签，处理父子层级与动作执行
@@ -228,12 +230,16 @@ export class BookmarkBar {
         // 已存在：仅更新类与标题，保持原 DOM 位置不动
         el.className = t.classes;
         el.title = t.title;
+        el.setAttribute('role', 'button');
+        el.tabIndex = 0;
       } else {
         // 新建：加入场动画（stagger 错开），追加到容器末尾
         el = document.createElement('div');
         el.className = t.classes + ' entering';
         el.dataset.id = t.id;
         el.title = t.title;
+        el.setAttribute('role', 'button');
+        el.tabIndex = 0;
         el.style.animationDelay = (idx * 0.04) + 's';
         el.innerHTML = `<div class="bookmark-shape"></div><span class="bookmark-label">${t.label}</span>`;
         el.addEventListener('animationend', () => {
@@ -257,7 +263,16 @@ export class BookmarkBar {
       e.stopPropagation();
       this.system.activate(el.dataset.id);
     };
+    this._barKeyHandler = (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      const el = e.target.closest('.bookmark[data-id]');
+      if (!el || el.classList.contains('disabled') || el.classList.contains('leaving')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.system.activate(el.dataset.id);
+    };
     this._barEl.addEventListener('click', this._barClickHandler);
+    this._barEl.addEventListener('keydown', this._barKeyHandler);
   }
 
   _executeAction(action) {
@@ -321,12 +336,21 @@ export class BookmarkBar {
   }
 
   async _importModel(lowPoly = false) {
+    if (this._importing) {
+      this.canvasRuntime.notify('正在导入模型中，请稍候');
+      return;
+    }
     this._pickFiles('.glb,.gltf,.obj,.bin,.png,.jpg,.jpeg,.webp,.mtl,model/gltf-binary,model/gltf+json,text/plain,image/*', async (files) => {
-      const file = files.find(item => /\.(glb|gltf|obj)$/i.test(item.name));
-      if (!file) return this.canvasRuntime.notify('未找到模型文件');
+      if (this._importing) return;
+      this._importing = true;
       let objectUrl = null;
       const dependencyUrls = new Map();
       try {
+        const file = files.find(item => /\.(glb|gltf|obj)$/i.test(item.name));
+        if (!file) return this.canvasRuntime.notify('未找到模型文件');
+        if (file.size > _MAX_IMPORT_SIZE) {
+          return this.canvasRuntime.notify(`模型文件过大（超过 ${_MAX_IMPORT_SIZE / (1024 * 1024)}MB），无法导入`);
+        }
         const ext = file.name.toLowerCase().split('.').pop();
         let object;
         objectUrl = URL.createObjectURL(file);
@@ -374,6 +398,7 @@ export class BookmarkBar {
       } finally {
         if (objectUrl) URL.revokeObjectURL(objectUrl);
         dependencyUrls.forEach(url => URL.revokeObjectURL(url));
+        this._importing = false;
       }
     });
   }
@@ -455,8 +480,8 @@ export class BookmarkBar {
 
   setMode(mode) {
     this.transformController.setMode(mode);
-    const modeEl = document.getElementById('statusMode');
-    if (modeEl) modeEl.textContent = `${MODE_NAMES[mode] || mode}模式`;
+    // #statusMode 的写入权由 MeshEditController 统一持有，切换变换模式时委托其显示状态
+    this.meshEditController?.setTransformMode(mode);
   }
 
   focusSelected() {
@@ -482,6 +507,7 @@ export class BookmarkBar {
     this._elInspectorClose?.removeEventListener('click', this._inspectorCloseHandler);
     this._elOutlineClose?.removeEventListener('click', this._outlineCloseHandler);
     this._barEl?.removeEventListener('click', this._barClickHandler);
+    this._barEl?.removeEventListener('keydown', this._barKeyHandler);
     this.canvasRuntime.dispose();
   }
 }
