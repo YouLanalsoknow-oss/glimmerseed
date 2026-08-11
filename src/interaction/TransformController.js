@@ -1,0 +1,144 @@
+import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import * as THREE from 'three';
+import { UpdateObjectCommand } from '../core/Commands.js';
+import { clone } from '../shared/utils.js';
+
+/**
+ * 交互控制层 — TransformControls 三模式 Gizmo（移动/旋转/缩放）
+ */
+export class TransformController {
+  constructor() {
+    this.controls = null;
+    this.viewport = null;
+    this.sceneManager = null;
+    this._isDragging = false;
+    this._mode = 'translate';
+    this._box = null;
+    this._topologyEditing = false;
+    this._transformBefore = null;
+  }
+
+  init(renderer, viewport, sceneManager) {
+    this.viewport = viewport;
+    this.sceneManager = sceneManager;
+
+    this.controls = new TransformControls(viewport.camera, renderer.domElement);
+    this.controls.setMode(this._mode);
+    this.controls.setSize(0.85);
+
+    // Handle API differences: r169+ uses getHelper()
+    const helper = this.controls.getHelper ? this.controls.getHelper() : this.controls;
+    viewport.scene.add(helper);
+
+    // Disable orbit controls during gizmo drag
+    this.controls.addEventListener('dragging-changed', (event) => {
+      this._isDragging = event.value;
+      viewport.controls.enabled = !event.value;
+      const mesh = this.controls.object;
+      if (event.value && mesh?.userData?.sceneObjectId) {
+        const object = this.sceneManager.getObject(mesh.userData.sceneObjectId);
+        this._transformBefore = object ? clone(object.data) : null;
+      } else if (!event.value && this._transformBefore && mesh?.userData?.sceneObjectId) {
+        const object = this.sceneManager.getObject(mesh.userData.sceneObjectId);
+        if (object) {
+          const after = clone(object.data);
+          this.sceneManager.pushCommand(new UpdateObjectCommand(this.sceneManager, mesh.userData.sceneObjectId, this._transformBefore, after));
+        }
+        this._transformBefore = null;
+      }
+    });
+
+    // Sync transform changes back to data model — O(1) via userData
+    this.controls.addEventListener('objectChange', () => {
+      const mesh = this.controls.object;
+      if (!mesh) return;
+      const id = mesh.userData?.sceneObjectId;
+      if (id) {
+        this.sceneManager.syncTransformFromMesh(id);
+        if (this._box) this._box.setFromObject(mesh);
+      }
+    });
+
+    // Auto-attach/detach on selection change
+    this._offSelection = sceneManager.on('selectionchange', ({ selection }) => {
+      if (selection.length === 0) {
+        this.detach();
+        this._hideBox();
+      } else {
+        const obj = this.sceneManager.getObject(selection[0]);
+        if (obj) { this.attach(obj.mesh); this._showBox(obj.mesh); }
+      }
+    });
+
+    // Detach if the attached object is removed
+    this._offObjectRemoved = sceneManager.on('objectremoved', () => {
+      const attached = this.controls?.object;
+      if (!attached) return;
+      let found = false;
+      for (const obj of this.sceneManager.objects.values()) {
+        if (obj.mesh === attached) { found = true; break; }
+      }
+      if (!found) this.detach();
+    });
+
+    return this;
+  }
+
+  setMode(mode) {
+    this._mode = mode;
+    if (this.controls) this.controls.setMode(mode);
+  }
+
+  setTopologyEditing(active) {
+    this._topologyEditing = Boolean(active);
+    if (this.controls) this.controls.enabled = !this._topologyEditing;
+    if (this._topologyEditing) {
+      this.detach();
+    } else {
+      const selected = this.sceneManager?.getPrimarySelection();
+      if (selected) this.attach(selected.mesh);
+    }
+  }
+
+  get mode() { return this._mode; }
+
+  /** 是否处于拓扑编辑状态（供 SelectionController 等外部组件读取） */
+  get topologyEditing() { return this._topologyEditing; }
+
+  attach(mesh) {
+    if (this.controls) this.controls.attach(mesh);
+  }
+
+  detach() {
+    if (this.controls) this.controls.detach();
+  }
+
+  get isDragging() { return this._isDragging; }
+
+  dispose() {
+    this._offSelection?.(); this._offSelection = null;
+    this._offObjectRemoved?.(); this._offObjectRemoved = null;
+    this.controls?.dispose();
+    this._hideBox();
+    this.controls = null;
+  }
+
+  _showBox(object) {
+    if (!this.viewport?.scene) return;
+    if (!this._box) {
+      this._box = new THREE.BoxHelper(object, 0x6c5a91);
+      this.viewport.scene.add(this._box);
+    } else {
+      this._box.setFromObject(object);
+      this._box.visible = true;
+    }
+  }
+
+  _hideBox() {
+    if (!this._box) return;
+    this.viewport?.scene?.remove(this._box);
+    this._box.geometry?.dispose();
+    this._box.material?.dispose();
+    this._box = null;
+  }
+}

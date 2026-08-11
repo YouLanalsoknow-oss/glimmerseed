@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GlimmerBook · 工作台</title>
+<link rel="stylesheet" href="styles.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "./node_modules/three/build/three.webgpu.js",
+    "three/addons/": "./node_modules/three/examples/jsm/"
+  }
+}
+</script>
+<script src="./node_modules/ag-psd/dist/bundle.js"></script>
+</head>
+<body>
+
+<!-- ===== 3D Viewport — fills entire browser ===== -->
+<canvas id="renderCanvas"></canvas>
+<div class="loading-overlay" id="loadingOverlay">
+  <div class="loading-text">正在初始化渲染器…</div>
+</div>
+<div class="viewport-hint" id="viewportHint"></div>
+
+<!-- ===== Bookmark Bar — floating, transparent ===== -->
+<header class="bookmark-bar" id="bookmarkBar">
+  <div class="bookmark-group permanent-group" id="permanentBookmarks"></div>
+  <div class="bookmark-divider"></div>
+  <div class="bookmark-group concept-group" id="conceptBookmarks"></div>
+  <div class="spacer"></div>
+  <span class="save-status" id="saveStatus">已保存</span>
+</header>
+
+<!-- ===== Sticky Note: Outline ===== -->
+<div class="sticky-note outline-note hidden" id="outlineNote">
+  <div class="sticky-tape"></div>
+  <div class="sticky-header">
+    <span class="sticky-title">场景大纲</span>
+    <span class="sticky-count" id="outlineCount">0</span>
+    <span class="spacer"></span>
+    <button class="sticky-close" id="outlineClose" title="收起">×</button>
+  </div>
+  <div class="sticky-body">
+    <div class="outline-list" id="outlineList">
+      <div class="empty-hint">场景为空<br>从书签创建第一个物体</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Sticky Note: Inspector ===== -->
+<div class="sticky-note inspector-note hidden" id="inspectorNote">
+  <div class="sticky-tape"></div>
+  <div class="sticky-header">
+    <span class="sticky-title">属性</span>
+    <span class="sticky-sub" id="inspectorSub">未选中</span>
+    <span class="spacer"></span>
+    <button class="sticky-close" id="inspectorClose" title="收起">×</button>
+  </div>
+  <div class="sticky-body inspector-body" id="inspectorBody">
+    <div class="empty-hint">未选中对象</div>
+  </div>
+</div>
+
+<!-- ===== Canvas Editor — 画布编辑区域（工具由书签栏提供）===== -->
+<div class="canvas-overlay hidden" id="canvasOverlay">
+  <div class="canvas-viewport" id="canvasViewport">
+    <div class="page-canvas" id="pageCanvas">
+      <div class="page-element text-element" style="left:12%;top:22%">山间歇息</div>
+      <div class="page-element sub-element" style="left:13%;top:38%">把一个念头放进空间里。让它在树影、山风和纸页之间慢慢长出形状。</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Status — floating, minimal ===== -->
+<div class="status-floating">
+  <span class="status-item" id="statusObjects">物体: 0</span>
+  <span class="status-sep">·</span>
+  <span class="status-item" id="statusSelection">未选中</span>
+  <span class="status-sep">·</span>
+  <span class="status-item" id="statusMode">移动模式</span>
+  <span class="spacer"></span>
+  <span class="status-item" id="statusBackend">渲染后端: 初始化中…</span>
+</div>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
