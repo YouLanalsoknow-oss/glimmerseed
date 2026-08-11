@@ -1,3 +1,5 @@
+import { sanitizeCanvasHtml, sanitizeCanvasStyle } from '../shared/utils.js';
+
 /**
  * 画布运行时 — 轻量 DOM 编辑器
  * 只在指针交互时更新元素，避免画布模式维持独立动画循环。
@@ -22,6 +24,8 @@ export class CanvasRuntime {
     this._canvasOverlay = null;   // L6: 缓存 canvasOverlay 引用，避免每次 keydown 查询
     this._notifyToken = 0;        // L2: 状态提示版本号，仅最新一次恢复旧文案
     this._notifyPrevious = null;  // L2: 同一批提示开始前的原始文案
+    this._notifyTimer = 0;        // L2: notify 的 setTimeout 句柄，dispose 时清理
+    this._disposed = false;       // 异步任务（图片/PSD 导入）完成前可被 dispose 的存活标志
   }
 
   init(viewport, page) {
@@ -61,14 +65,15 @@ export class CanvasRuntime {
       const element = document.createElement(tag);
       element.className = 'page-element ' + String(item.className || '').split(/\s+/).filter(c => /^[a-zA-Z0-9_-]+$/.test(c) && c !== 'selected').join(' ');
       // 富文本编辑记录 innerHTML；旧存档没有 html 时回退到纯文本。
-      if (typeof item.html === 'string') element.innerHTML = item.html;
+      // HTML 与 style 均来自持久化存档，需净化防存储型 XSS。
+      if (typeof item.html === 'string') element.innerHTML = sanitizeCanvasHtml(item.html);
       else element.textContent = item.text || '';
       if (item.resourceId) {
         element.dataset.resourceId = item.resourceId;
         await this._attachResource(element, item.resourceId);
       } else if (item.src && /^(https?:|blob:)/i.test(item.src)) element.src = item.src;
       if (item.alt) element.alt = item.alt;
-      if (item.style) element.setAttribute('style', item.style);
+      if (item.style) element.setAttribute('style', sanitizeCanvasStyle(item.style));
       this.page.appendChild(element);
     }));
     this._clearSelection();
@@ -79,6 +84,7 @@ export class CanvasRuntime {
     try {
       const record = await this.resourceStore?.get(id);
       if (!record?.blob) throw new Error('资源不存在');
+      if (this._disposed || !this.page) return; // 资源就绪前画布已释放，丢弃
       const url = URL.createObjectURL(record.blob);
       this._trackResourceUrl(id, url);
       element.src = url;
@@ -166,22 +172,28 @@ export class CanvasRuntime {
 
   async importPSD(file) {
     if (!file || !this.page) return;
+    let url = null;
     try {
       const readPsd = globalThis.agPsd?.readPsd;
       if (typeof readPsd !== 'function') throw new Error('PSD 解析器未加载');
       const buffer = await file.arrayBuffer();
+      if (this._disposed) return;
       const psd = readPsd(buffer, { skipLayerImageData: false, skipCompositeImageData: false });
       if (!psd.canvas) throw new Error('PSD 未生成合成预览');
       const image = document.createElement('img');
       image.className = 'page-element canvas-image canvas-psd';
       image.alt = file.name;
       const blob = await new Promise((resolve, reject) => psd.canvas.toBlob(result => result ? resolve(result) : reject(new Error('PSD 预览编码失败')), 'image/png'));
+      if (this._disposed) return;
       const resource = await this.resourceStore?.put(blob, { name: file.name, type: 'image/png' });
       if (!resource) throw new Error('资源存储不可用');
+      if (this._disposed) return;
       image.dataset.resourceId = resource.id;
-      image.src = URL.createObjectURL(blob);
-      this._trackResourceUrl(resource.id, image.src);
+      url = URL.createObjectURL(blob);
+      image.src = url;
+      this._trackResourceUrl(resource.id, url);
       image.onload = () => {
+        if (this._disposed || !this.page) { URL.revokeObjectURL(url); url = null; return; }
         const maxW = Math.min(560, this.page.clientWidth * 0.82);
         const ratio = image.naturalHeight / image.naturalWidth || 1;
         this._place(image, { x: (this.page.clientWidth - maxW) / 2, y: (this.page.clientHeight - maxW * ratio) / 2 }, maxW, maxW * ratio);
@@ -190,6 +202,7 @@ export class CanvasRuntime {
         this._record('create', { element: image });
       };
     } catch (error) {
+      if (url) { URL.revokeObjectURL(url); url = null; }
       console.error('[CanvasRuntime] PSD import failed:', error);
       this.notify(`PSD 导入失败：${error.message}`);
     }
@@ -204,7 +217,8 @@ export class CanvasRuntime {
     const token = (this._notifyToken += 1);
     if (isFirst) this._notifyPrevious = previous;
     status.textContent = message;
-    setTimeout(() => {
+    clearTimeout(this._notifyTimer);
+    this._notifyTimer = setTimeout(() => {
       // L2: 仅最新一次提示恢复旧文案，避免短间隔提示互相覆盖
       if (token !== this._notifyToken) return;
       this._notifyToken = 0;
@@ -371,6 +385,7 @@ export class CanvasRuntime {
         el.alt = file.name;
         this.resourceStore?.put(file, { name: file.name, type: file.type }).then(resource => {
           if (!resource) throw new Error('资源存储不可用');
+          if (this._disposed || !this.page) return; // 存储完成前画布已释放，丢弃
           el.dataset.resourceId = resource.id;
           el.src = URL.createObjectURL(file);
           this._trackResourceUrl(resource.id, el.src);
@@ -473,10 +488,8 @@ export class CanvasRuntime {
     while (this._history.length > this._maxHistory) this._history.shift();
   }
 
-  _releaseHistoryAction(action) {
-    const element = action?.element || action?.snapshot?.element;
-    if (element?.src?.startsWith('blob:')) URL.revokeObjectURL(element.src);
-  }
+  /* 撤销/重做不回收 blob URL：redo 仍需要该 URL，且 createMany 克隆元素与原创共享同一 URL，
+     误回收会破坏原创与 redo。blob URL 统一在 dispose/_clearHistoryAndResources 时回收。 */
 
   undo() {
     const action = this._history.pop();
@@ -512,7 +525,7 @@ export class CanvasRuntime {
     } else if (action.type === 'layer') {
       action.items.slice().reverse().forEach(item => item.parent.insertBefore(item.element, item.next));
     } else if (action.type === 'text') {
-      action.element.innerHTML = action.from;
+      action.element.innerHTML = sanitizeCanvasHtml(action.from);
     }
     this._future.push(action);
     this._notifyChange();
@@ -551,7 +564,7 @@ export class CanvasRuntime {
     } else if (action.type === 'layer') {
       action.items.forEach(item => action.direction > 0 ? item.parent.appendChild(item.element) : item.parent.insertBefore(item.element, item.parent.firstChild));
     } else if (action.type === 'text') {
-      action.element.innerHTML = action.to;
+      action.element.innerHTML = sanitizeCanvasHtml(action.to);
     }
     this._positionHandles();
     this._appendHistory(action);
@@ -625,6 +638,9 @@ export class CanvasRuntime {
   }
 
   dispose() {
+    this._disposed = true;
+    clearTimeout(this._notifyTimer);
+    this._notifyTimer = 0;
     this.drag = null;
     this._clearSelection();
     this.page?.querySelectorAll('.canvas-image').forEach(el => {

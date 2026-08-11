@@ -12,6 +12,9 @@ import { isTextureUsedByAnyOther } from '../shared/textureUtils.js';
 let _idCounter = 0;
 function genId() { return `obj-${Date.now().toString(36)}-${++_idCounter}`; }
 
+// TextureLoader 无状态，模块级复用，避免每次加载都新建实例
+const _textureLoader = new THREE.TextureLoader();
+
 export class SceneManager {
   constructor(scene, geometryFactory = null, resourceStore = null) {
     this.scene = scene;
@@ -386,15 +389,17 @@ export class SceneManager {
   }
 
   // ===== H1: 贴图资源恢复 =====
-  /** 依据序列化材质中的 *MapResourceId 异步取回纹理并挂接到对应材质 */
-  async _loadMaterialTexture(material, prop, resourceId) {
+  /** 依据序列化材质中的 *MapResourceId 异步取回纹理并挂接到对应材质。
+   *  alive 用于加载期间对象被删除/整体 disposition 时中止，避免挂到已释放材质造成泄漏。 */
+  async _loadMaterialTexture(material, prop, resourceId, alive = () => true) {
     if (!resourceId || !this.resourceStore || !material) return;
     let record;
     try { record = await this.resourceStore.get(resourceId); } catch (_) { return; }
     if (!record?.blob) return;
     const url = URL.createObjectURL(record.blob);
     try {
-      const texture = await new THREE.TextureLoader().loadAsync(url);
+      const texture = await _textureLoader.loadAsync(url);
+      if (!alive()) { texture.dispose(); return; } // 加载期间对象已释放，丢弃纹理
       texture.userData.resourceId = resourceId;
       // L2: 赋值前释放同通道旧纹理，避免重复挂载泄漏 GPU 资源
       if (material[prop]?.isTexture) material[prop].dispose();
@@ -412,6 +417,8 @@ export class SceneManager {
     if (!mesh || !this.resourceStore) return;
     const list = Array.isArray(materialData) ? materialData : materialData ? [materialData] : [];
     if (!list.length) return;
+    const objectId = mesh.userData?.sceneObjectId;
+    const alive = () => this.scene != null && (!objectId || this.objects.has(objectId));
     const tasks = [];
     mesh.traverse?.(node => {
       if (!node.material) return;
@@ -421,10 +428,10 @@ export class SceneManager {
         if (index >= list.length) return;
         const value = list[index] ?? list[0];
         if (!value || !material) return;
-        tasks.push(this._loadMaterialTexture(material, 'map', value.mapResourceId));
-        tasks.push(this._loadMaterialTexture(material, 'normalMap', value.normalMapResourceId));
-        tasks.push(this._loadMaterialTexture(material, 'roughnessMap', value.roughnessMapResourceId));
-        tasks.push(this._loadMaterialTexture(material, 'metalnessMap', value.metalnessMapResourceId));
+        tasks.push(this._loadMaterialTexture(material, 'map', value.mapResourceId, alive));
+        tasks.push(this._loadMaterialTexture(material, 'normalMap', value.normalMapResourceId, alive));
+        tasks.push(this._loadMaterialTexture(material, 'roughnessMap', value.roughnessMapResourceId, alive));
+        tasks.push(this._loadMaterialTexture(material, 'metalnessMap', value.metalnessMapResourceId, alive));
       });
     });
     return Promise.all(tasks).catch(() => undefined);
@@ -537,12 +544,15 @@ export class SceneManager {
               loader.setMaterials(materials);
             }
           }
-          return { mesh: await loader.loadAsync(url), data: { type: 'model' } };
+          const mesh = await loader.loadAsync(url);
+          if (!this.scene) { this._disposeObjectTree(mesh); return null; } // 加载期间场景被释放
+          return { mesh, data: { type: 'model' } };
         }
         const { GLTFLoader } = await import('three/addons/loaders/GLTFLoader.js');
         const loader = new GLTFLoader();
         loader.setURLModifier(value => dependencyUrls.get(dependencyName(value)) || value);
         const loaded = await loader.loadAsync(url);
+        if (!this.scene) { this._disposeObjectTree(loaded.scene); return null; } // 加载期间场景被释放
         return { mesh: loaded.scene, data: { type: 'model' } };
       } finally {
         dependencyUrls.forEach(value => URL.revokeObjectURL(value));
@@ -553,6 +563,19 @@ export class SceneManager {
     } finally {
       URL.revokeObjectURL(url);
     }
+  }
+
+  /** 释放从加载器得到的对象树（含纹理/材质/几何体），用于加载被中止时避免 GPU 泄漏 */
+  _disposeObjectTree(root) {
+    root?.traverse?.(node => {
+      node.geometry?.dispose();
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      materials.forEach(material => {
+        if (!material) return;
+        Object.values(material).forEach(value => { if (value?.isTexture) value.dispose(); });
+        material.dispose();
+      });
+    });
   }
 
   /** M1: 来源3 — 由 serialized meshes 重建外部模型 */

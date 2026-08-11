@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { MeshEditSession } from './MeshEditSession.js';
 import { TopologyEditCommand } from '../core/Commands.js';
 import { MODE_NAMES } from '../shared/constants.js';
+import { schedule } from '../shared/throttleByRAF.js';
 
 /** 网格编辑协调器：负责会话、拾取覆盖层和对象级控制器切换。 */
 export class MeshEditController {
@@ -35,11 +36,13 @@ export class MeshEditController {
   init(renderer, viewport, sceneManager, transformController) {
     this.renderer = renderer; this.viewport = viewport; this.sceneManager = sceneManager; this.transformController = transformController;
     viewport.scene.add(this.overlay);
-    this._down = e => this._onDown(e); this._move = e => this._onMove(e); this._up = e => this._onUp(e);
+    this._down = e => this._onDown(e); this._move = e => this._onMove(e); this._up = e => this._onUp(e); this._cancel = e => this._onCancel(e);
     renderer.domElement.addEventListener('pointerdown', this._down);
     renderer.domElement.addEventListener('pointermove', this._move);
     renderer.domElement.addEventListener('pointerup', this._up);
+    renderer.domElement.addEventListener('pointercancel', this._cancel);
     this._offSelection = sceneManager.on('selectionchange', () => this._syncTarget());
+    this._scheduleHover = schedule(() => { if (this._lastHoverEvent) this._updateHover(this._lastHoverEvent); });
     return this;
   }
 
@@ -189,6 +192,8 @@ export class MeshEditController {
 
   _onMove(event) {
     if (!this.session) return;
+    this._scheduleHover?.cancel();
+    this._lastHoverEvent = null;
     if (this._drag?.type === 'box') { this._updateBoxVisual(event); return; }
     if (this._drag) {
       if (this.mode !== 'vertex') return;
@@ -204,7 +209,9 @@ export class MeshEditController {
       this._updateOverlayPositions();
       return;
     }
-    this._updateHover(event);
+    // 悬停拾取合并到 rAF 帧内执行，避免 pointermove 每帧全量射线求交
+    this._lastHoverEvent = event;
+    this._scheduleHover?.();
   }
 
   _updateHover(event) {
@@ -278,6 +285,17 @@ export class MeshEditController {
     this._drag = null; this._boxStart = null;
   }
 
+  /** pointercancel（移动端打断/失焦/元素移除）时恢复被禁用的 orbit 与残留 UI，避免状态卡死 */
+  _onCancel(event) {
+    this._removeBoxVisual();
+    this._enableOrbit(event?.pointerId);
+    const wasVertexDrag = this._drag && this.mode === 'vertex';
+    this.session?.endGesture();
+    // 顶点坐标已随拖拽写入 mesh 几何，cancel 时同样提交，与 _onUp 保持一致，避免编辑丢失且不可撤销
+    if (wasVertexDrag) this._syncGeometry(this._drag?.before);
+    this._drag = null; this._boxStart = null;
+  }
+
   _disableOrbit(pointerId) {
     if (this.viewport?.controls) {
       this._orbitWasEnabled = this.viewport.controls.enabled;
@@ -322,6 +340,7 @@ export class MeshEditController {
   }
 
   _syncGeometry(before = null) {
+    if (!this.session) return; // 拖拽期间会话被释放（切换模式/dispose）时安全退出
     const id = this.session?.mesh?.userData?.sceneObjectId;
     if (!id) return;
     const after = this.session.serialize();
@@ -454,7 +473,7 @@ export class MeshEditController {
       if (!this._edges || rebuildStatic) {
         if (this._edges) this._disposeStaticEdgeLayer();
         const edgePositions = new Float32Array(edges.length * 6);
-        edges.forEach((edge, i) => { edge.vertices.forEach((id, n) => this._worldVertex(vertices[id], edgePositions, i * 6 + n * 3)); });
+        edges.forEach((edge, i) => { edge.vertices.forEach((id, n) => { if (vertices[id]) this._worldVertex(vertices[id], edgePositions, i * 6 + n * 3); }); });
         const geometry = new THREE.BufferGeometry(); geometry.setAttribute('position', new THREE.BufferAttribute(edgePositions, 3));
         this._edges = new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color: 0x6c5a91, depthTest: false, transparent: true, opacity: 0.9 }));
         this._edges.renderOrder = 20; this.overlay.add(this._edges);
@@ -543,7 +562,7 @@ export class MeshEditController {
   /** 复用静态边线 geometry，仅写入 position 数组并标记 needsUpdate */
   _writeStaticEdgePositions(edges, vertices, attr) {
     const arr = attr.array;
-    edges.forEach((edge, i) => { edge.vertices.forEach((id, n) => this._worldVertex(vertices[id], arr, i * 6 + n * 3)); });
+    edges.forEach((edge, i) => { edge.vertices.forEach((id, n) => { if (vertices[id]) this._worldVertex(vertices[id], arr, i * 6 + n * 3); }); });
     attr.needsUpdate = true;
   }
 
@@ -629,10 +648,13 @@ export class MeshEditController {
     }
     if (this._selectedVertices) {
       const attr = this._selectedVertices.geometry.attributes.position;
-      moved.forEach((id, i) => {
+      // 与 _renderOverlay 构建选中层时一致：跳过越界顶点，用累计 offset 而非序号 i，避免点位错位
+      let offset = 0;
+      moved.forEach(id => {
         if (vertices[id]) {
           this._worldVertex(vertices[id]);
-          attr.setXYZ(i, this._worldTemp.x, this._worldTemp.y, this._worldTemp.z);
+          attr.setXYZ(offset, this._worldTemp.x, this._worldTemp.y, this._worldTemp.z);
+          offset += 1;
         }
       });
       attr.needsUpdate = true;
@@ -655,11 +677,15 @@ export class MeshEditController {
   dispose() {
     clearTimeout(this._toastTimer);
     this._toastTimer = 0;
+    this._scheduleHover?.cancel();
+    this._scheduleHover = null;
+    this._lastHoverEvent = null;
     this._clearOverlay(); this._removeBoxVisual(); this.transformController?.setTopologyEditing(false);
     this._offSelection?.(); this._offSelection = null;
     this.renderer?.domElement.removeEventListener('pointerdown', this._down);
     this.renderer?.domElement.removeEventListener('pointermove', this._move);
     this.renderer?.domElement.removeEventListener('pointerup', this._up);
+    this.renderer?.domElement.removeEventListener('pointercancel', this._cancel);
     this.viewport?.scene.remove(this.overlay);
     this.session = null;
   }
