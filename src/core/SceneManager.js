@@ -135,8 +135,37 @@ export class SceneManager {
     } else {
       this._meshList.delete(obj.mesh);
     }
-    this.emit('objectremoved', { id });
-    if (wasSelected) this.emit('selectionchange', { selection: [...this.selection] });
+    // M8: 批量删除时抑制 objectremoved/scenechanged，由 removeObjects 统一触发一次
+    if (!this._suppressEvents) {
+      this.emit('objectremoved', { id });
+      if (wasSelected) this.emit('selectionchange', { selection: [...this.selection] });
+      this.emit('scenechanged');
+    }
+  }
+
+  /**
+   * 批量删除多个对象 — 期间抑制事件，结束后统一触发一次，避免 N 次全量重建+保存调度。
+   * @param {Array<string>} ids 对象 id 列表
+   */
+  removeObjects(ids) {
+    const list = (ids || []).filter(id => this.objects.has(id));
+    if (list.length === 0) return;
+    const prevSuppress = this._suppressEvents;
+    this._suppressEvents = true;
+    let removedAnySelected = false;
+    try {
+      for (const id of list) {
+        const wasSelected = this.selection.has(id);
+        const obj = this.objects.get(id);
+        // dispose 语义与原 deleteSelected 一致：外部对象释放资源，工厂对象仅移除
+        this.removeObject(id, { dispose: !obj?.external });
+        if (wasSelected) removedAnySelected = true;
+      }
+    } finally {
+      this._suppressEvents = prevSuppress;
+    }
+    this.emit('objectremoved', { ids: list });
+    if (removedAnySelected) this.emit('selectionchange', { selection: [...this.selection] });
     this.emit('scenechanged');
   }
 

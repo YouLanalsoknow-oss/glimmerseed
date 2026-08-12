@@ -238,6 +238,8 @@ export class CanvasRuntime {
 
   _pointerDown(event) {
     if (event.button !== 0 || !this.page || !this._isVisible()) return;
+    // 拖拽期间 page 布局不变，缓存 rect 供 _pagePoint 复用，避免每帧 getBoundingClientRect
+    this._dragRect = this.page.getBoundingClientRect();
     const handle = event.target.closest('.canvas-handle');
     if (handle && this.selected) {
       event.preventDefault();
@@ -302,6 +304,7 @@ export class CanvasRuntime {
       });
     }
     this.drag = null;
+    this._dragRect = null;
   }
 
   _resizeFromDrag(dx, dy, keepRatio) {
@@ -437,7 +440,8 @@ export class CanvasRuntime {
   }
 
   _pagePoint(event) {
-    const rect = this.page.getBoundingClientRect();
+    // 拖拽期间复用缓存的 page rect，避免每个 pointermove 触发一次 getBoundingClientRect（强制重排）
+    const rect = this._dragRect || this.page.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
   }
 

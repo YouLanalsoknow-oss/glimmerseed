@@ -368,6 +368,11 @@ export class BookmarkBar {
       this.canvasRuntime.notify('正在导入模型中，请稍候');
       return;
     }
+    // 资源存储不可用时中止导入，避免模型丢失 sourceResourceId 静默降级（重载只能走拓扑回退）
+    if (!this.persistence?.resources) {
+      this.canvasRuntime.notify('资源存储不可用，无法导入模型');
+      return;
+    }
     this._pickFiles('.glb,.gltf,.obj,.bin,.png,.jpg,.jpeg,.webp,.mtl,model/gltf-binary,model/gltf+json,text/plain,image/*', true, async (files) => {
       if (this._importing) return;
       this._importing = true;
@@ -544,9 +549,11 @@ export class BookmarkBar {
   deleteSelected() {
     const selected = this.sceneManager.getSelectedObjects();
     if (selected.length === 0) return;
+    // 批量删除：一次统一触发 scenechanged，避免 N 次全量重建+保存调度
+    const ids = selected.map(obj => obj.data.id);
+    this.sceneManager.removeObjects(ids);
     for (const obj of selected) {
       const cmd = new RemoveObjectCommand(this.sceneManager, this.factory, obj.data.id);
-      this.sceneManager.removeObject(obj.data.id, { dispose: !obj.external });
       this.sceneManager.pushCommand(cmd);
     }
   }

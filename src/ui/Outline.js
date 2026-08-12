@@ -12,8 +12,8 @@ export class Outline {
   }
 
   init() {
-    this._offAdded = this.sceneManager.on('objectadded', () => this.render());
-    this._offRemoved = this.sceneManager.on('objectremoved', () => this.render());
+    this._offAdded = this.sceneManager.on('objectadded', ({ id }) => this._handleAdded(id));
+    this._offRemoved = this.sceneManager.on('objectremoved', ({ id, ids }) => this._handleRemoved(id, ids));
     // 重命名只更新对应名称节点，避免单对象改名触发整表全量重建（O(1) DOM 更新）
     this._offName = this.sceneManager.on('namechanged', ({ id, name }) => this._updateName(id, name));
     // 选择切换只更新 active class，不重建整个列表
@@ -21,6 +21,45 @@ export class Outline {
     // 事件委托：容器上只绑一次点击监听，避免每次 render 全量重建后重新 querySelectorAll + 逐个绑定
     const list = document.getElementById('outlineList');
     if (list) list.addEventListener('click', this._onListClick);
+  }
+
+  /** 单对象新增：DOM 级插入，避免整表全量重建 */
+  _handleAdded(id) {
+    const list = document.getElementById('outlineList');
+    if (!list || !id) return;
+    const empty = list.querySelector('.empty-hint');
+    if (empty) empty.remove();
+    const obj = this.sceneManager.getObject(id);
+    if (!obj) return;
+    const count = document.getElementById('outlineCount');
+    if (count) count.textContent = this.sceneManager.count;
+    const selection = this.sceneManager.selection;
+    const item = document.createElement('div');
+    item.className = 'outline-item' + (selection.has(obj.data.id) ? ' active' : '');
+    item.dataset.id = obj.data.id;
+    const icon = document.createElement('span'); icon.className = 'icon'; icon.textContent = SceneManager.getTypeIcon(obj.data.type);
+    const name = document.createElement('span'); name.className = 'name'; name.textContent = String(obj.data.name ?? '');
+    const del = document.createElement('span'); del.className = 'del'; del.dataset.del = obj.data.id; del.title = '删除'; del.textContent = '\u00d7';
+    item.append(icon, name, del);
+    list.appendChild(item);
+  }
+
+  /** 单对象删除：DOM 级移除；批量删除（ids 存在）走全量重建 */
+  _handleRemoved(id, ids) {
+    if (ids) {
+      // 批量删除：一次重建比 N 次逐个移除更省
+      this.render();
+      return;
+    }
+    const list = document.getElementById('outlineList');
+    if (!list || !id) return;
+    const item = list.querySelector(`.outline-item[data-id="${CSS.escape(id)}"]`);
+    if (item) item.remove();
+    const count = document.getElementById('outlineCount');
+    if (count) count.textContent = this.sceneManager.count;
+    if (this.sceneManager.count === 0) {
+      list.innerHTML = '<div class="empty-hint">场景为空<br>从工具栏创建第一个物体</div>';
+    }
   }
 
   dispose() {
