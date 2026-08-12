@@ -3,6 +3,7 @@ import { DEFAULT_MATERIAL, TYPE_NAMES, TYPE_ICONS } from '../shared/constants.js
 import { clone, dependencyName } from '../shared/utils.js';
 import { isValidTopology, writeTopologyToGeometry, buildTopologyGeometry } from '../shared/topology.js';
 import { isTextureUsedByAnyOther } from '../shared/textureUtils.js';
+import { createEmitter } from '../shared/events.js';
 
 /**
  * 场景管理层 — 对象树、选择集、纯数据模型、撤销重做栈
@@ -22,22 +23,12 @@ export class SceneManager {
     this.resourceStore = resourceStore;
     this.objects = new Map();   // id -> { mesh, data }
     this.selection = new Set(); // set of ids
-    this._listeners = new Map();
+    Object.assign(this, createEmitter()); // M5: 共享事件实现（on/emit）
     this._undoStack = [];
     this._redoStack = [];
     this._meshList = [];
     this._suppressEvents = false; // M7: 批量恢复期间抑制 objectadded/scenechanged
     this._nameCounter = 0;        // L2: 独立递增的默认命名计数器
-  }
-
-  // ===== Event system =====
-  on(event, cb) {
-    if (!this._listeners.has(event)) this._listeners.set(event, new Set());
-    this._listeners.get(event).add(cb);
-    return () => this._listeners.get(event)?.delete(cb);
-  }
-  emit(event, data) {
-    this._listeners.get(event)?.forEach(cb => { try { cb(data); } catch (e) { console.error(e); } });
   }
 
   // ===== Object management =====
@@ -129,22 +120,11 @@ export class SceneManager {
     const wasSelected = this.selection.has(id);
     this.selection.delete(id);
     this.scene.remove(obj.mesh);
-    const disposeNode = (node) => {
-      node.geometry?.dispose();
-      const materials = Array.isArray(node.material) ? node.material : [node.material];
-      materials.forEach(material => {
-        if (!material) return;
-        // 只释放不再被场景中其他对象引用的纹理，避免共享纹理泄漏或误释放。
-        Object.values(material).forEach(value => {
-          if (value?.isTexture && !isTextureUsedByAnyOther(this.objects.values(), value, id)) value.dispose();
-        });
-        material.dispose();
-      });
-      if (node.userData) delete node.userData.sceneObjectId;
-    };
     if (dispose) {
-      if (obj.external) obj.mesh.traverse?.(disposeNode);
-      else disposeNode(obj.mesh);
+      // 只释放不再被场景中其他对象引用的纹理，避免共享纹理泄漏或误释放。
+      const shouldDisposeTexture = (value) => !isTextureUsedByAnyOther(this.objects.values(), value, id);
+      if (obj.external) obj.mesh.traverse?.(node => this._disposeNode(node, shouldDisposeTexture));
+      else this._disposeNode(obj.mesh, shouldDisposeTexture);
     }
     this.objects.delete(id);
     if (obj.mesh.userData) delete obj.mesh.userData.sceneObjectId;
@@ -438,6 +418,32 @@ export class SceneManager {
   }
 
   // ===== Serialization
+  /** H2: 收集场景对象已引用的全部资源 id（供 io/Persistence.js 的 _doSave 合并保留集使用）。
+   *  遍历每个对象的 data：sourceResourceId、sourceResources[].id，
+   *  以及各材质（material 可能是数组或对象）上的 mapResourceId/normalMapResourceId/
+   *  roughnessMapResourceId/metalnessMapResourceId。过滤 undefined/null/空串。 */
+  getReferencedResourceIds() {
+    const ids = new Set();
+    const push = (id) => { if (id != null && id !== '') ids.add(id); };
+    for (const { data } of this.objects.values()) {
+      if (!data) continue;
+      push(data.sourceResourceId);
+      if (Array.isArray(data.sourceResources)) {
+        for (const res of data.sourceResources) push(res?.id);
+      }
+      const materials = Array.isArray(data.material) ? data.material
+        : data.material ? [data.material] : [];
+      for (const m of materials) {
+        if (!m) continue;
+        push(m.mapResourceId);
+        push(m.normalMapResourceId);
+        push(m.roughnessMapResourceId);
+        push(m.metalnessMapResourceId);
+      }
+    }
+    return ids;
+  }
+
   getSceneData() {
     return {
       version: 1,
@@ -657,28 +663,33 @@ export class SceneManager {
   /** 批量释放所有物体资源 — 不触发事件，由调用方统一 emit */
   _disposeAllObjects() {
     const disposedTextures = new Set();
-    const disposeNode = (node) => {
-      node.geometry?.dispose();
-      const materials = Array.isArray(node.material) ? node.material : [node.material];
-      materials.forEach(material => {
-        if (!material) return;
-        Object.values(material).forEach(value => {
-          if (value?.isTexture && !disposedTextures.has(value)) {
-            disposedTextures.add(value);
-            value.dispose();
-          }
-        });
-        material.dispose();
-      });
+    const shouldDisposeTexture = (value) => {
+      if (disposedTextures.has(value)) return false;
+      disposedTextures.add(value);
+      return true;
     };
     for (const { mesh, external } of this.objects.values()) {
       this.scene?.remove(mesh);
-      if (external) mesh.traverse?.(disposeNode);
-      else disposeNode(mesh);
+      if (external) mesh.traverse?.(node => this._disposeNode(node, shouldDisposeTexture));
+      else this._disposeNode(mesh, shouldDisposeTexture);
     }
     this.objects.clear();
     this.selection.clear();
     this._meshList.length = 0;
+  }
+
+  /** 释放单个节点（几何体 + 材质 + 纹理）— 纹理是否释放由回调决定，供 removeObject 与 _disposeAllObjects 复用 */
+  _disposeNode(node, shouldDisposeTexture) {
+    node.geometry?.dispose();
+    const materials = Array.isArray(node.material) ? node.material : [node.material];
+    materials.forEach(material => {
+      if (!material) return;
+      Object.values(material).forEach(value => {
+        if (value?.isTexture && shouldDisposeTexture(value)) value.dispose();
+      });
+      material.dispose();
+    });
+    if (node.userData) delete node.userData.sceneObjectId;
   }
 
   static getTypeIcon(type) { return TYPE_ICONS[type] || '?'; }
@@ -690,7 +701,7 @@ export class SceneManager {
     [...this._undoStack, ...this._redoStack].forEach(command => command.dispose?.());
     this._undoStack = [];
     this._redoStack = [];
-    this._listeners.clear();
+    this.clear();
     this.scene = null;
     this.factory = null;
   }

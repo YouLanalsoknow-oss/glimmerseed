@@ -5,6 +5,8 @@
  * 概念书签：点击后成为父级，其余概念书签降为子级（缩小排列）
  */
 
+import { createEmitter } from '../shared/events.js';
+
 export class BookmarkSystem {
   constructor() {
     this.permanent = [];
@@ -13,17 +15,7 @@ export class BookmarkSystem {
     this.activeParent = null;
     this.activeId = '3d';   // 当前选中书签（摆动选中态）
     this.mode = '3d';           // '3d' | 'canvas'
-    this._listeners = new Map();
-  }
-
-  on(event, cb) {
-    if (!this._listeners.has(event)) this._listeners.set(event, new Set());
-    this._listeners.get(event).add(cb);
-    return () => this._listeners.get(event)?.delete(cb);
-  }
-
-  emit(event, data) {
-    this._listeners.get(event)?.forEach(cb => { try { cb(data); } catch (e) { console.error(e); } });
+    Object.assign(this, createEmitter()); // 共享事件实现（on/emit）
   }
 
   registerPermanent(def) {

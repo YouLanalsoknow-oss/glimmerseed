@@ -111,7 +111,8 @@ export class Persistence {
         return true;
       } catch (err) {
         console.error('[Persistence] save failed:', err);
-        this._status('error');
+        // 配额路径已发出详细备份提示，保留原提示，不覆盖为笼统的 "error"
+        if (!err?.promptAlreadyNotified) this._status('error');
         return false;
       }
     };
@@ -128,14 +129,19 @@ export class Persistence {
     // 1. 场景元数据 → localStorage（不含 Blob，体积小）
     const json = JSON.stringify(data);
     if (!this._setItemWithQuotaFallback(STORAGE_KEY, json)) {
-      // 配额不足：旧值已备份且已提示，抛错走外层 error 状态，不静默丢存档
-      throw new Error('存档过大：超出 localStorage 存储上限，已备份原有存档');
+      // 配额不足：旧值已备份且已提示（详细备份说明），标记错误让外层保留该提示，不笼统覆盖
+      const err = new Error('存档过大：超出 localStorage 存储上限，已备份原有存档');
+      err.promptAlreadyNotified = true;
+      throw err;
     }
 
     // 2. 清理 IndexedDB 中不再被引用的资源
-    if (this._resourceStore && canvasRuntime) {
-      const referencedIds = canvasRuntime.getResourceIds();
-      await this._resourceStore.removeUnreferenced(referencedIds);
+    //    保留集 = 画布资源 id ∪ 场景外部导入资源（OBJ/GLTF 及其 .bin/.mtl/.png 依赖及材质贴图）
+    if (this._resourceStore && (canvasRuntime || sceneManager)) {
+      const referencedIds = new Set(canvasRuntime ? canvasRuntime.getResourceIds() : []);
+      const sceneIds = sceneManager?.getReferencedResourceIds?.() || [];
+      sceneIds.forEach(id => { if (id) referencedIds.add(id); });
+      await this._resourceStore.removeUnreferenced([...referencedIds]);
     }
     return true;
   }
@@ -151,6 +157,8 @@ export class Persistence {
       if (!json) return null;
       const data = JSON.parse(json);
       this._checkVersion(data);
+      // 画布数据按版本迁移后再校验，避免旧存档因新增规则被误判为无效
+      if (data.canvas) data.canvas = this._migrateCanvas(data.canvas);
       if (!this._isValidSceneData(data)) throw new Error('保存数据结构无效');
       if (data.camera && !this._isValidCamera(data.camera)) delete data.camera;
       if (data.canvas && !this._isValidCanvas(data.canvas)) delete data.canvas;
@@ -181,6 +189,33 @@ export class Persistence {
     } else if (v > SCENE_VERSION) {
       console.warn(`[Persistence] 存档版本 ${v} 高于当前支持版本 ${SCENE_VERSION}，可能存在不兼容字段，将尝试兼容加载`);
     }
+  }
+
+  /**
+   * 画布存档版本迁移 — 将旧版本（<3）画布数据规范化为当前版本结构（version 3）。
+   * 保证字段完整、类型正确，避免旧存档因新增校验规则被误判为无效而静默丢弃。
+   * @param {object} canvas 原始画布数据
+   * @returns {object} 迁移后的画布数据
+   */
+  _migrateCanvas(canvas) {
+    if (!canvas || typeof canvas !== 'object') return canvas;
+    const version = Number.isInteger(canvas.version) ? canvas.version : 1;
+    if (version >= 3) return canvas;
+    const elements = Array.isArray(canvas.elements) ? canvas.elements.map(item => {
+      if (!item || typeof item !== 'object') return null;
+      const normalized = {
+        tag: typeof item.tag === 'string' ? item.tag : 'div',
+        className: typeof item.className === 'string' ? item.className : '',
+        style: typeof item.style === 'string' ? item.style : '',
+      };
+      if (typeof item.text === 'string') normalized.text = item.text;
+      if (typeof item.html === 'string') normalized.html = item.html;
+      if (typeof item.resourceId === 'string') normalized.resourceId = item.resourceId;
+      if (typeof item.src === 'string') normalized.src = item.src;
+      if (typeof item.alt === 'string') normalized.alt = item.alt;
+      return normalized;
+    }).filter(Boolean) : [];
+    return { version: 3, grid: Boolean(canvas.grid), elements };
   }
 
   _isValidSceneData(data) {
@@ -216,7 +251,8 @@ export class Persistence {
       canvas.elements.length <= 2000 && canvas.elements.every(item => item && typeof item === 'object' &&
       typeof item.tag === 'string' && typeof item.className === 'string' && item.className.length < 2000 && typeof item.style === 'string' && item.style.length < 10000 &&
         (item.text == null || typeof item.text === 'string') && (item.html == null || typeof item.html === 'string') &&
-        (item.src == null || typeof item.src === 'string') &&
+        (item.src == null || typeof item.src === 'string' && item.src.length < 2000) &&
+        (item.alt == null || typeof item.alt === 'string' && item.alt.length < 2000) &&
         (item.resourceId == null || typeof item.resourceId === 'string' && item.resourceId.length < 200));
   }
 

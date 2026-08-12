@@ -232,6 +232,7 @@ export class BookmarkBar {
         el.title = t.title;
         el.setAttribute('role', 'button');
         el.tabIndex = 0;
+        el.setAttribute('aria-pressed', t.classes.includes('active') ? 'true' : 'false');
       } else {
         // 新建：加入场动画（stagger 错开），追加到容器末尾
         el = document.createElement('div');
@@ -240,6 +241,7 @@ export class BookmarkBar {
         el.title = t.title;
         el.setAttribute('role', 'button');
         el.tabIndex = 0;
+        el.setAttribute('aria-pressed', t.classes.includes('active') ? 'true' : 'false');
         el.style.animationDelay = (idx * 0.04) + 's';
         el.innerHTML = `<div class="bookmark-shape"></div><span class="bookmark-label">${t.label}</span>`;
         el.addEventListener('animationend', () => {
@@ -315,6 +317,26 @@ export class BookmarkBar {
   _canvasTool(tool) {
     if (tool === 'psd') { this._importPSD(); return; }
     this.canvasRuntime.setTool(tool);
+  }
+
+  /**
+   * 导出场景为 GLB 文件。成功/失败均通过状态提示反馈。
+   */
+  async _export() {
+    try {
+      await this.exporter?.exportGLB?.(this.sceneManager);
+      this.notify('已导出 GLB 文件');
+    } catch (error) {
+      console.error('[BookmarkBar] export failed:', error);
+      this.notify(`导出失败：${error?.message || '未知错误'}`);
+    }
+  }
+
+  /**
+   * 状态提示 — 复用画布运行时的提示通道（写入 #saveStatus）。
+   */
+  notify(message) {
+    this.canvasRuntime.notify(message);
   }
 
   _pickFile(accept, callback) {

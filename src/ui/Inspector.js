@@ -2,6 +2,7 @@ import { SceneManager } from '../core/SceneManager.js';
 import { DEFAULT_MATERIAL } from '../shared/constants.js';
 import { UpdateObjectCommand } from '../core/Commands.js';
 import { clone } from '../shared/utils.js';
+import { escapeHtml } from '../shared/escapeHtml.js';
 import { schedule } from '../shared/throttleByRAF.js';
 
 const RAD2DEG = 180 / Math.PI;
@@ -52,7 +53,7 @@ export class Inspector {
     sub.textContent = SceneManager.getTypeName(d.type);
 
     body.innerHTML = `
-      <input class="name-field" id="insp-name" type="text" value="${this._esc(d.name)}" placeholder="名称">
+      <input class="name-field" id="insp-name" type="text" value="${escapeHtml(d.name)}" placeholder="名称">
 
       <div class="field-group">
         <div class="field-group-title">位置</div>
@@ -238,12 +239,6 @@ export class Inspector {
     if (this._colorText && document.activeElement !== this._colorText) this._colorText.value = m.color;
     if (this._metalEl && document.activeElement !== this._metalEl) this._metalEl.value = m.metalness;
     if (this._roughEl && document.activeElement !== this._roughEl) this._roughEl.value = m.roughness;
-  }
-
-  _esc(s) {
-    const div = document.createElement('div');
-    div.textContent = s || '';
-    return div.innerHTML;
   }
 
   /** 仅接受 #rrggbb，杜绝外部数据注入非法属性值 */

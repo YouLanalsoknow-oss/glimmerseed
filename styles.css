@@ -1,18 +1,16 @@
 :root{
   --ink:#2e2a2b;--muted:#807678;--paper:#fffdf8;--paper-2:#f5eee3;
   --line:#ded3c6;--line-2:#e8dfd3;
-  --violet:#6c5a91;--violet-2:#eee8f8;--violet-deep:#5a4a81;
-  --green:#73887c;
+  --violet:#6c5a91;--violet-2:#eee8f8;
 
   /* 书签纸质色 */
   --bm-paper-1:#ede4d4;--bm-paper-2:#ddd0c0;
-  --bm-paper-hover-1:#f4ede2;--bm-paper-hover-2:#e4d7c7;
   --bm-paper-active-1:#e2d6c2;--bm-paper-active-2:#d2c5b2;
   --bm-ink:#5a4f44;
 
   /* 书签尺寸 */
   --bm-w:46px;--bm-h:54px;--bm-perm-w:50px;--bm-perm-h:58px;
-  --bm-child-w:36px;--bm-child-h:42px;--bm-gap:6px;
+  --bm-gap:6px;
   --bm-transition:transform .3s cubic-bezier(.2,.8,.2,1),opacity .3s ease,filter .3s;
 
   /* 便签纸 */

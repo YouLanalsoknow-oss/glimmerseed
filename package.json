@@ -2,6 +2,12 @@
   "name": "glimmerbook-workbench",
   "version": "1.0.0",
   "description": "GlimmerBook 工作台 — 书页画布与 3D 场景编辑器",
+  "author": "YouLanalsoknow",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YouLanalsoknow-oss/glimmerseed.git"
+  },
   "private": true,
   "type": "module",
   "engines": {

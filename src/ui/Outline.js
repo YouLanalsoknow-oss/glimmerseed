@@ -1,5 +1,6 @@
 import { SceneManager } from '../core/SceneManager.js';
 import { RemoveObjectCommand } from '../core/Commands.js';
+import { escapeHtml } from '../shared/escapeHtml.js';
 
 /**
  * 界面层 — 场景大纲：对象列表、点击选中、删除
@@ -48,12 +49,12 @@ export class Outline {
     }
 
     const selection = this.sceneManager.selection;
-    // id 也走 _esc：限定字符集，防止损坏存档中的 id 含引号/尖括号注入属性
+    // id 也走 escapeHtml：限定字符集，防止损坏存档中的 id 含引号/尖括号注入属性
     list.innerHTML = objects.map(obj => `
-      <div class="outline-item ${selection.has(obj.id) ? 'active' : ''}" data-id="${this._esc(obj.id)}">
+      <div class="outline-item ${selection.has(obj.id) ? 'active' : ''}" data-id="${escapeHtml(obj.id)}">
         <span class="icon">${SceneManager.getTypeIcon(obj.type)}</span>
-        <span class="name">${this._esc(obj.name)}</span>
-        <span class="del" data-del="${this._esc(obj.id)}" title="删除">\u00d7</span>
+        <span class="name">${escapeHtml(obj.name)}</span>
+        <span class="del" data-del="${escapeHtml(obj.id)}" title="删除">\u00d7</span>
       </div>
     `).join('');
 
@@ -75,11 +76,5 @@ export class Outline {
         this.sceneManager.pushCommand(cmd);
       });
     });
-  }
-
-  _esc(s) {
-    const div = document.createElement('div');
-    div.textContent = s || '';
-    return div.innerHTML;
   }
 }
