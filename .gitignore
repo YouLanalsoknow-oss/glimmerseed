@@ -1,1 +1,14 @@
-﻿node_modules/
+node_modules/*
+!node_modules/three/
+!node_modules/three/build/
+!node_modules/three/examples/
+node_modules/three/src/
+node_modules/three/docs/
+node_modules/three/test/
+node_modules/three/editor/
+node_modules/three/examples/fonts/
+node_modules/three/examples/models/
+node_modules/three/examples/textures/
+!node_modules/ag-psd/
+!node_modules/base64-js/
+!node_modules/pako/
