@@ -1,4 +1,4 @@
-import { sanitizeCanvasHtml, sanitizeCanvasStyle } from '../shared/utils.js';
+import { sanitizeCanvasHtml, sanitizeCanvasStyle, isSafeUrl } from '../shared/utils.js';
 
 /**
  * 画布运行时 — 轻量 DOM 编辑器
@@ -74,7 +74,7 @@ export class CanvasRuntime {
       if (item.resourceId) {
         element.dataset.resourceId = item.resourceId;
         pending.push(this._attachResource(element, item.resourceId));
-      } else if (item.src && /^(https?:|blob:)/i.test(item.src)) element.src = item.src;
+      } else if (item.src && isSafeUrl(item.src)) element.src = item.src;
       if (item.alt) element.alt = item.alt;
       if (item.style) element.setAttribute('style', sanitizeCanvasStyle(item.style));
       this.page.appendChild(element);
@@ -475,6 +475,7 @@ export class CanvasRuntime {
     if (!this.selectedSet.size) return;
     const items = [...this.selectedSet].map(element => ({ element, parent: element.parentNode, next: element.nextSibling }));
     [...this.selectedSet].forEach(element => {
+      if (!element.parentNode) return; // 元素已脱离 DOM 时跳过，避免崩溃
       if (direction > 0) element.parentNode.appendChild(element);
       else element.parentNode.insertBefore(element, element.parentNode.firstChild);
     });

@@ -33,6 +33,7 @@ export class MeshEditController {
     this._toastVersion = 0;
     this._toastRestoreText = null;
     this._toastTimer = 0;
+    this._selectionSig = ''; // 选中高亮层重建签名缓存（P: 未变化时跳过重建）
   }
 
   init(renderer, viewport, sceneManager, transformController) {
@@ -455,6 +456,10 @@ export class MeshEditController {
     const { vertices, edges, faces } = this.session.topology;
     const invalidEdges = new Set(this._diagnostic?.nonManifoldEdges || []);
     const radius = this.session.mesh.geometry.boundingSphere?.radius || 1;
+    // P: 选中集签名 — 未变化时跳过选中高亮层重建，消除每次点击 down/up 的重复 dispose/realloc
+    const selectionSig = this._selectionSignature();
+    const selectionChanged = rebuildStatic || selectionSig !== this._selectionSig;
+    this._selectionSig = selectionSig;
     if (this.mode === 'vertex') {
       // 模式从边/面切回顶点时，清理残留的静态边线层
       if (this._edges) this._disposeStaticEdgeLayer();
@@ -468,14 +473,16 @@ export class MeshEditController {
       } else {
         this._writeStaticPositions(vertices, this._vertexPoints.geometry.attributes.position);
       }
-      // —— 选中高亮层：选中集变化时只重建这一层 ——
-      this._disposeSelectedLayer();
-      const selectedPositions = new Float32Array(this.session.selection.vertices.size * 3);
-      let offset = 0;
-      [...this.session.selection.vertices].forEach(id => { if (vertices[id]) { this._worldVertex(vertices[id], selectedPositions, offset); offset += 3; } });
-      this._selectedVertices = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0xd18b53, size: Math.max(radius * 0.07, 0.045), sizeAttenuation: true, depthTest: false }));
-      this._selectedVertices.geometry.setAttribute('position', new THREE.Float32BufferAttribute(selectedPositions, 3));
-      this._selectedVertices.renderOrder = 21; this.overlay.add(this._selectedVertices);
+      // —— 选中高亮层：仅选中集变化时重建 ——
+      if (selectionChanged) {
+        this._disposeSelectedLayer();
+        const selectedPositions = new Float32Array(this.session.selection.vertices.size * 3);
+        let offset = 0;
+        [...this.session.selection.vertices].forEach(id => { if (vertices[id]) { this._worldVertex(vertices[id], selectedPositions, offset); offset += 3; } });
+        this._selectedVertices = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0xd18b53, size: Math.max(radius * 0.07, 0.045), sizeAttenuation: true, depthTest: false }));
+        this._selectedVertices.geometry.setAttribute('position', new THREE.Float32BufferAttribute(selectedPositions, 3));
+        this._selectedVertices.renderOrder = 21; this.overlay.add(this._selectedVertices);
+      }
     } else {
       // 模式从顶点切到边/面时，清理残留的静态顶点层
       if (this._vertexPoints) this._disposeStaticVertexLayer();
@@ -490,19 +497,21 @@ export class MeshEditController {
       } else {
         this._writeStaticEdgePositions(edges, vertices, this._edges.geometry.attributes.position);
       }
-      // —— 选中高亮层：选中集变化时只重建这一层 ——
-      this._disposeSelectedLayer();
-      this._selectedEdges = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xd18b53, depthTest: false, linewidth: 2 }));
-      const selectedPositions = new Float32Array(this.session.selection.edges.size * 6);
-      let offset = 0;
-      [...this.session.selection.edges].forEach(id => {
-        const edge = edges[id];
-        if (!edge) return;
-        edge.vertices.forEach(vertexId => { if (vertices[vertexId]) { this._worldVertex(vertices[vertexId], selectedPositions, offset); offset += 3; } });
-      });
-      this._selectedEdges.geometry.setAttribute('position', new THREE.Float32BufferAttribute(selectedPositions, 3));
-      this._selectedEdges.renderOrder = 21; this.overlay.add(this._selectedEdges);
-      if (this.mode === 'face' && this.session.selection.faces.size > 0) {
+      // —— 选中高亮层：仅选中集变化时重建 ——
+      if (selectionChanged) {
+        this._disposeSelectedLayer();
+        this._selectedEdges = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xd18b53, depthTest: false, linewidth: 2 }));
+        const selectedPositions = new Float32Array(this.session.selection.edges.size * 6);
+        let offset = 0;
+        [...this.session.selection.edges].forEach(id => {
+          const edge = edges[id];
+          if (!edge) return;
+          edge.vertices.forEach(vertexId => { if (vertices[vertexId]) { this._worldVertex(vertices[vertexId], selectedPositions, offset); offset += 3; } });
+        });
+        this._selectedEdges.geometry.setAttribute('position', new THREE.Float32BufferAttribute(selectedPositions, 3));
+        this._selectedEdges.renderOrder = 21; this.overlay.add(this._selectedEdges);
+      }
+      if (selectionChanged && this.mode === 'face' && this.session.selection.faces.size > 0) {
         const facePositions = new Float32Array(this.session.selection.faces.size * 9);
         let offset2 = 0;
         this.session.selection.faces.forEach(faceId => {
@@ -531,6 +540,15 @@ export class MeshEditController {
     this._disposeHoverElement();
     this._createHoverElement();
     this.sceneManager?.emit('topologyoverlay');
+  }
+
+  /** 选中集签名 — 由三个选中子集的内容 + 网格世界矩阵快照决定，用于跳过未变化的选中层重建 */
+  _selectionSignature() {
+    if (!this.session) return '';
+    const s = this.session.selection;
+    const m = this.session.mesh.matrixWorld;
+    const matrixStamp = m ? `${m.elements[12]}|${m.elements[13]}|${m.elements[14]}|${m.elements[0]}|${m.elements[5]}|${m.elements[10]}` : '';
+    return `${this.mode}@${matrixStamp}#${s.vertices.size}:${[...s.vertices].join(',')}|${s.edges.size}:${[...s.edges].join(',')}|${s.faces.size}:${[...s.faces].join(',')}`;
   }
 
   /** 仅释放选中高亮层对象，保留静态拓扑层以复用 geometry */
@@ -720,6 +738,7 @@ export class MeshEditController {
     this._hoverElement?.geometry.dispose(); this._hoverElement?.material.dispose();
     this._errorEdges?.geometry.dispose(); this._errorEdges?.material.dispose();
     this._vertexPoints = null; this._selectedVertices = null; this._edges = null; this._selectedEdges = null; this._selectedFaces = null; this._hoverElement = null; this._errorEdges = null;
+    this._selectionSig = ''; // 清空覆盖层后重置签名，避免跨会话误判为"未变化"
     while (this.overlay.children.length) this.overlay.remove(this.overlay.children[0]);
   }
 

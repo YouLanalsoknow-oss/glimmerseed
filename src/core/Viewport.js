@@ -88,8 +88,8 @@ export class Viewport {
 
   setCameraData(data) {
     if (!data || !this.camera || !this.controls) return;
-    if (data.position) this.camera.position.set(data.position[0] || 0, data.position[1] || 0, data.position[2] || 0);
-    if (data.target) this.controls.target.set(data.target[0] || 0, data.target[1] || 0, data.target[2] || 0);
+    if (data.position) this.camera.position.set(data.position[0] ?? 0, data.position[1] ?? 0, data.position[2] ?? 0);
+    if (data.target) this.controls.target.set(data.target[0] ?? 0, data.target[1] ?? 0, data.target[2] ?? 0);
     this.controls.update();
   }
 

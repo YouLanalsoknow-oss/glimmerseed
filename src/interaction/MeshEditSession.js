@@ -144,6 +144,8 @@ export class MeshEditSession {
       const edge = this.topology.edges[id];
       const a = this.topology.vertices[edge.vertices[0]];
       const b = this.topology.vertices[edge.vertices[1]];
+      // 退化边（无顶点/越界）直接跳过，避免 a/b 为 undefined 时崩溃
+      if (!a || !b) return;
       midpoint.set(id, this.topology.vertices.push([
         a[0] + (b[0] - a[0]) * ratio,
         a[1] + (b[1] - a[1]) * ratio,
@@ -179,10 +181,15 @@ export class MeshEditSession {
     const center0 = this._loopCenter(loops[0]);
     const center1 = this._loopCenter(aligned);
     const bridgeDir = center1.clone().sub(center0);
-    const va = new THREE.Vector3(...this.topology.vertices[loops[0][0]]);
-    const vb = new THREE.Vector3(...this.topology.vertices[loops[0][1]]);
-    const vc = new THREE.Vector3(...this.topology.vertices[aligned[1]]);
-    const normal = new THREE.Vector3().crossVectors(vb.clone().sub(va), vc.clone().sub(va));
+    const va = this.topology.vertices[loops[0][0]];
+    const vb = this.topology.vertices[loops[0][1]];
+    const vc = this.topology.vertices[aligned[1]];
+    // 越界/缺失顶点时中止桥接，避免 ...undefined 展开崩溃
+    if (!va || !vb || !vc) return false;
+    const vVa = new THREE.Vector3(...va);
+    const vVb = new THREE.Vector3(...vb);
+    const vVc = new THREE.Vector3(...vc);
+    const normal = new THREE.Vector3().crossVectors(vVb.clone().sub(vVa), vVc.clone().sub(vVa));
     if (normal.dot(bridgeDir) < 0) aligned = [...aligned].reverse();
     const before = this._capture();
     const faces = [];
@@ -198,7 +205,10 @@ export class MeshEditSession {
 
   _loopCenter(loop) {
     const center = new THREE.Vector3();
-    loop.forEach(id => center.add(new THREE.Vector3(...this.topology.vertices[id])));
+    loop.forEach(id => {
+      const v = this.topology.vertices[id];
+      if (v) center.add(new THREE.Vector3(...v));
+    });
     return center.divideScalar(Math.max(loop.length, 1));
   }
 
@@ -215,8 +225,10 @@ export class MeshEditSession {
       });
     });
     const ids = new Set([start]); const queue = [start];
-    while (queue.length) {
-      const edge = this.topology.edges[queue.shift()];
+    // 下标指针遍历，避免 queue.shift() 的 O(n²)
+    for (let head = 0; head < queue.length; head++) {
+      const edge = this.topology.edges[queue[head]];
+      if (!edge) continue;
       edge.vertices.forEach(vertex => {
         (vertexEdges.get(vertex) || []).forEach(id => {
           if (!ids.has(id)) { ids.add(id); queue.push(id); }
@@ -367,6 +379,8 @@ export class MeshEditSession {
       const face = faces[id];
       if (!face) return;
       const [pa, pb, pc] = face.vertices.map(v => vertices[v]);
+      // 越界/缺失顶点时跳过该面的法线计算，避免 ...undefined 展开崩溃
+      if (!pa || !pb || !pc) return;
       const ab = new THREE.Vector3(...pb).sub(new THREE.Vector3(...pa));
       const ac = new THREE.Vector3(...pc).sub(new THREE.Vector3(...pa));
       const cross = new THREE.Vector3().crossVectors(ab, ac);
@@ -393,6 +407,7 @@ export class MeshEditSession {
     const vertexMap = new Map();
     vertexOffsets.forEach((offset, vId) => {
       const v = vertices[vId];
+      if (!v) return;
       vertices.push([v[0] + offset.x, v[1] + offset.y, v[2] + offset.z]);
       vertexMap.set(vId, vertices.length - 1);
     });

@@ -21,9 +21,13 @@ const _textureLoader = new THREE.TextureLoader();
  * 接受 number(0~0xffffff)、合法 CSS 颜色字符串、THREE.Color 实例；
  * 其余（null、空串、畸形字符串、NaN 等）一律回退 fallback。
  */
+const _SIMPLE_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
 function _sanitizeColor(value, fallback = '#cccccc') {
   if (typeof value === 'number' && isFinite(value) && value >= 0) return value;
   if (typeof value === 'string' && value !== '') {
+    // 常见 hex 字符串直接放行，避免逐一 new THREE.Color 构造校验的开销
+    if (_SIMPLE_HEX.test(value)) return value;
     try { new THREE.Color(value); return value; } catch (_) { return fallback; }
   }
   if (value && value.isColor) return value;

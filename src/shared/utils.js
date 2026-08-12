@@ -28,10 +28,16 @@ function _isSafeAttrName(name) {
     && !['style', 'srcdoc', 'formaction', 'xlink:href', 'srcset', 'usemap', 'poster', 'background', 'lowsrc', 'longdesc', 'dynsrc', 'xref'].includes(name);
 }
 
-function _isSafeUrl(value) {
+const SAFE_DATA_IMAGE = /^data:image\/(png|jpeg|jpg|gif|webp);/;
+
+/** 校验 URL 是否安全：拒绝 javascript:/vbscript: 与危险 data: 载荷（供 src/href 复用） */
+export function isSafeUrl(value) {
   if (typeof value !== 'string') return false;
   const v = value.trim().toLowerCase();
-  return !(v.startsWith('javascript:') || v.startsWith('vbscript:') || v.startsWith('data:text/html') || v.startsWith('data:text/plain'));
+  if (v.startsWith('javascript:') || v.startsWith('vbscript:')) return false;
+  // data: 仅放行白名单光栅位图，拒绝 data:image/svg+xml、data:text/*、data:application/* 等可载荷
+  if (v.startsWith('data:')) return SAFE_DATA_IMAGE.test(v);
+  return true;
 }
 
 function _isSafeStyle(value) {
@@ -66,8 +72,8 @@ export function sanitizeCanvasHtml(html) {
       [...child.attributes].forEach(attr => {
         const name = attr.name.toLowerCase();
         if (!_isSafeAttrName(name)) { child.removeAttribute(attr.name); return; }
-        if (name === 'src' && !_isSafeUrl(attr.value)) { child.removeAttribute(attr.name); return; }
-        if (name === 'href' && !_isSafeUrl(attr.value)) { child.removeAttribute(attr.name); return; }
+        if (name === 'src' && !isSafeUrl(attr.value)) { child.removeAttribute(attr.name); return; }
+        if (name === 'href' && !isSafeUrl(attr.value)) { child.removeAttribute(attr.name); return; }
       });
       walk(child);
     });
