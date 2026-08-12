@@ -90,11 +90,11 @@ export class Inspector {
         </div>
         <div class="field" style="grid-template-columns:56px 1fr;margin-bottom:8px">
           <label style="text-align:left;padding-left:2px">金属度</label>
-          <input type="range" min="0" max="1" step="0.05" id="insp-metalness" value="${m.metalness}" style="padding:0;border:0;background:none">
+          <input type="range" min="0" max="1" step="0.05" id="insp-metalness" value="${m.metalness ?? 0.1}" style="padding:0;border:0;background:none">
         </div>
         <div class="field" style="grid-template-columns:56px 1fr">
           <label style="text-align:left;padding-left:2px">粗糙度</label>
-          <input type="range" min="0" max="1" step="0.05" id="insp-roughness" value="${m.roughness}" style="padding:0;border:0;background:none">
+          <input type="range" min="0" max="1" step="0.05" id="insp-roughness" value="${m.roughness ?? 0.7}" style="padding:0;border:0;background:none">
         </div>
       </div>
     `;
@@ -113,7 +113,7 @@ export class Inspector {
     this._metalEl = document.getElementById('insp-metalness');
     this._roughEl = document.getElementById('insp-roughness');
 
-    const nameEl = document.getElementById('insp-name');
+    const nameEl = this._nameEl;
     if (nameEl) {
       nameEl.addEventListener('input', () => {
         this.sceneManager.updateName(this._currentId, nameEl.value);
@@ -126,8 +126,8 @@ export class Inspector {
       input.addEventListener('blur', () => this._commitSnapshot());
     });
 
-    const colorEl = document.getElementById('insp-color');
-    const colorText = document.getElementById('insp-color-text');
+    const colorEl = this._colorEl;
+    const colorText = this._colorText;
     if (colorEl && colorText) {
       colorEl.addEventListener('input', () => {
         colorText.value = colorEl.value;
@@ -149,7 +149,7 @@ export class Inspector {
       });
     }
 
-    const metalEl = document.getElementById('insp-metalness');
+    const metalEl = this._metalEl;
     if (metalEl) {
       metalEl.addEventListener('input', () => {
         this.sceneManager.updateMaterial(this._currentId, { metalness: parseFloat(metalEl.value) });
@@ -158,7 +158,7 @@ export class Inspector {
       metalEl.addEventListener('blur', () => this._commitSnapshot());
     }
 
-    const roughEl = document.getElementById('insp-roughness');
+    const roughEl = this._roughEl;
     if (roughEl) {
       roughEl.addEventListener('input', () => {
         this.sceneManager.updateMaterial(this._currentId, { roughness: parseFloat(roughEl.value) });
@@ -179,7 +179,10 @@ export class Inspector {
     const obj = this.sceneManager.getObject(this._currentId);
     if (obj) {
       const after = clone(obj.data);
-      if (JSON.stringify(after) !== JSON.stringify(this._beforeSnapshot)) {
+      // 性能：仅比较可编辑字段（name/transform/material）的轻量签名，
+      // 避免对含 geometry.topology 的大对象做两次全量 JSON.stringify
+      const sig = (d) => JSON.stringify([d?.name, d?.transform, d?.material]);
+      if (sig(after) !== sig(this._beforeSnapshot)) {
         this.sceneManager.pushCommand(new UpdateObjectCommand(this.sceneManager, this._currentId, this._beforeSnapshot, after));
       }
     }
@@ -192,7 +195,12 @@ export class Inspector {
     const obj = this.sceneManager.getObject(this._currentId);
     if (!obj) return;
     const t = obj.data.transform;
-    let val = parseFloat(input.value) || 0;
+    // 空值安全：transform 缺失某分量时用默认三维数组，避免展开 undefined 崩溃
+    const arr = [...(t?.[type] ?? [0, 0, 0])];
+    const parsed = parseFloat(input.value);
+    // 空值安全：非数字/清空输入时回退原值，不把位置/旋转/缩放静默写成 0
+    if (!Number.isFinite(parsed)) { input.value = String(arr[axis] ?? 0); return; }
+    let val = parsed;
     if (type === 'scale') {
       // 缩放钳制到 [0.001, 1000]，避免 0/负缩放导致网格缩放为 0 不可见
       val = Math.min(1000, Math.max(0.001, val));
@@ -202,7 +210,6 @@ export class Inspector {
       val = (((val % 360) + 540) % 360) - 180;
       val *= DEG2RAD;
     }
-    const arr = [...t[type]];
     arr[axis] = val;
     this.sceneManager.updateTransform(this._currentId, { [type]: arr });
   }
@@ -212,7 +219,7 @@ export class Inspector {
     if (!obj) return;
     const d = obj.data;
     const t = d.transform;
-    const m = d.material;
+    const m = d.material || DEFAULT_MATERIAL;
 
     // 使用缓存的 DOM 引用，避免每帧 querySelectorAll
     const inputs = this._transformInputs;
@@ -235,10 +242,10 @@ export class Inspector {
 
     if (this._nameEl && document.activeElement !== this._nameEl) this._nameEl.value = d.name;
 
-    if (this._colorEl) this._colorEl.value = m.color;
-    if (this._colorText && document.activeElement !== this._colorText) this._colorText.value = m.color;
-    if (this._metalEl && document.activeElement !== this._metalEl) this._metalEl.value = m.metalness;
-    if (this._roughEl && document.activeElement !== this._roughEl) this._roughEl.value = m.roughness;
+    if (this._colorEl) this._colorEl.value = m.color ?? DEFAULT_MATERIAL.color;
+    if (this._colorText && document.activeElement !== this._colorText) this._colorText.value = m.color ?? DEFAULT_MATERIAL.color;
+    if (this._metalEl && document.activeElement !== this._metalEl) this._metalEl.value = m.metalness ?? 0.1;
+    if (this._roughEl && document.activeElement !== this._roughEl) this._roughEl.value = m.roughness ?? 0.7;
   }
 
   /** 仅接受 #rrggbb，杜绝外部数据注入非法属性值 */

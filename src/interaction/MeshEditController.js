@@ -26,6 +26,8 @@ export class MeshEditController {
     this._boxStart = null;
     this._boxElement = null;
     this._hoverIndex = -1;
+    this._hoverElement = null;
+    this._hoverType = ''; // 悬停对象类型（vertex/edge/face），用于 hover 复用
     this._orbitWasEnabled = undefined;
     // 顶部状态栏模式提示的恢复状态（L2：单一版本号，仅最新一次恢复原文案）
     this._toastVersion = 0;
@@ -162,29 +164,37 @@ export class MeshEditController {
     this.pointer.set(((event.clientX - rect.left) / rect.width) * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
     this.raycaster.setFromCamera(this.pointer, this.viewport.camera);
     let hit = false;
-    if (this.mode === 'edge' && this._edges) {
-      const radius = this.session.mesh.geometry.boundingSphere?.radius || 1;
-      this.raycaster.params.Line.threshold = Math.max(radius * 0.04, 0.02);
-      const edgeHit = this.raycaster.intersectObject(this._edges, false)[0];
-      if (edgeHit?.index != null) {
-        const edgeId = Math.floor(edgeHit.index / 2);
-        if (event.altKey) this.session.selectBoundaryLoop(edgeId, event.shiftKey);
-        else this.session.select(edgeId, event.shiftKey);
-        hit = true;
+    if (this.mode === 'edge') {
+      // 覆盖层未构建时先渲染，避免 `_edges` 为 null 导致首次点击静默跳过拾取
+      if (!this._edges) this._renderOverlay();
+      if (this._edges) {
+        const radius = this.session.mesh.geometry.boundingSphere?.radius || 1;
+        this.raycaster.params.Line.threshold = Math.max(radius * 0.04, 0.02);
+        const edgeHit = this.raycaster.intersectObject(this._edges, false)[0];
+        if (edgeHit?.index != null) {
+          const edgeId = Math.floor(edgeHit.index / 2);
+          if (event.altKey) this.session.selectBoundaryLoop(edgeId, event.shiftKey);
+          else this.session.select(edgeId, event.shiftKey);
+          hit = true;
+        }
       }
     } else if (this.mode === 'face') {
       const faceHit = this.raycaster.intersectObject(this.session.mesh, false)[0];
       if (faceHit?.faceIndex != null) { this.session.select(faceHit.faceIndex, event.shiftKey); hit = true; }
     } else if (this.mode === 'vertex') {
-      this.raycaster.params.Points.threshold = Math.max((this.session.mesh.geometry.boundingSphere?.radius || 1) * 0.06, 0.04);
-      const vertexHit = this.raycaster.intersectObject(this._vertexPoints, false)[0];
-      if (vertexHit) {
-        this.session.select(vertexHit.index, event.shiftKey);
-        this.session.beginGesture();
-        this._drag = { index: vertexHit.index, x: event.clientX, y: event.clientY, before: this._captureTopology() };
-        this._disableOrbit(event.pointerId);
-        hit = true;
-      } else { this._setStatus('未命中顶点：请放大模型或开启框选模式'); }
+      // 覆盖层未构建时先渲染，避免 `_vertexPoints` 为 null 导致触发射线拾取崩溃
+      if (!this._vertexPoints) this._renderOverlay();
+      if (this._vertexPoints) {
+        this.raycaster.params.Points.threshold = Math.max((this.session.mesh.geometry.boundingSphere?.radius || 1) * 0.06, 0.04);
+        const vertexHit = this.raycaster.intersectObject(this._vertexPoints, false)[0];
+        if (vertexHit) {
+          this.session.select(vertexHit.index, event.shiftKey);
+          this.session.beginGesture();
+          this._drag = { index: vertexHit.index, x: event.clientX, y: event.clientY, before: this._captureTopology() };
+          this._disableOrbit(event.pointerId);
+          hit = true;
+        } else { this._setStatus('未命中顶点：请放大模型或开启框选模式'); }
+      }
     }
     if (!hit && !event.shiftKey) this.session.clearSelection();
     this._renderOverlay();
@@ -359,7 +369,7 @@ export class MeshEditController {
       this.sceneManager.pushCommand(new TopologyEditCommand(this.sceneManager, id, before, topology));
       // 拓扑变化未走 applyTopologyData 的默认 emit，需手动补发以触发自动保存。
       const record = this.sceneManager.getObject(id);
-      this.sceneManager.emit('objectchanged', { id, data: record?.data });
+      if (record) this.sceneManager.emit('objectchanged', { id, data: record.data }); // 空值安全：对象可能被并发移除
       this.sceneManager.emit('scenechanged');
     } else {
       this.sceneManager.applyTopologyData(id, topology);
@@ -566,11 +576,47 @@ export class MeshEditController {
     attr.needsUpdate = true;
   }
 
-  /** 仅更新悬停元素 — hover 变化时不重建全部覆盖层，大幅减少 GC 压力 */
+  /** 仅更新悬停元素 — hover 变化时复用同模式对象，仅原地改写 position，避免每帧重建 geometry/material 的 GC 抖动 */
   _updateHoverOnly() {
+    if (this._hoverElement && this._hoverType === this.mode && this._rewriteHoverGeometry()) {
+      this.sceneManager?.emit('topologyoverlay');
+      return;
+    }
     this._disposeHoverElement();
     this._createHoverElement();
     this.sceneManager?.emit('topologyoverlay');
+  }
+
+  /** 原地改写悬停元素 position 属性；返回 false 表示应重建（模式/索引/选中态变化） */
+  _rewriteHoverGeometry() {
+    const session = this.session;
+    const index = this._hoverIndex;
+    const el = this._hoverElement;
+    if (!session || !el || !el.geometry || index < 0) return false;
+    const { vertices, edges, faces } = session.topology;
+    const selected = session.selection[`${this.mode}s`];
+    if (selected?.has(index)) return false; // 已选中 → 应隐藏，走 dispose 重建
+    const attr = el.geometry.getAttribute('position');
+    if (!attr?.array) return false;
+    const arr = attr.array;
+    if (this.mode === 'vertex' && index < vertices.length) {
+      this._worldVertex(vertices[index], arr, 0);
+      attr.needsUpdate = true;
+      return true;
+    }
+    if (this.mode === 'edge' && index < edges.length) {
+      let o = 0;
+      edges[index].vertices.forEach(vId => { if (vertices[vId]) { this._worldVertex(vertices[vId], arr, o); o += 3; } });
+      attr.needsUpdate = true;
+      return true;
+    }
+    if (this.mode === 'face' && index < faces.length) {
+      let o = 0;
+      faces[index].vertices.forEach(vId => { if (vertices[vId]) { this._worldVertex(vertices[vId], arr, o); o += 3; } });
+      attr.needsUpdate = true;
+      return true;
+    }
+    return false;
   }
 
   _disposeHoverElement() {
@@ -579,12 +625,14 @@ export class MeshEditController {
     this._hoverElement.material.dispose();
     this.overlay.remove(this._hoverElement);
     this._hoverElement = null;
+    this._hoverType = '';
   }
 
   _createHoverElement() {
     if (!this.session || this._hoverIndex < 0) return;
     const { vertices, edges, faces } = this.session.topology;
     const radius = this.session.mesh.geometry.boundingSphere?.radius || 1;
+    this._hoverType = this.mode;
 
     if (this.mode === 'vertex' && this._hoverIndex < vertices.length && !this.session.selection.vertices.has(this._hoverIndex)) {
       const hoverVertex = new Float32Array(3);
@@ -636,7 +684,8 @@ export class MeshEditController {
     if (!this.session) return;
     const { vertices } = this.session.topology;
     // 拖拽只移动选中的顶点，因此仅更新这些顶点的覆盖层位置，避免 O(全部顶点)
-    const moved = [...this.session.selection.vertices];
+    // 直接遍历 Set，避免每帧 [...selection.vertices] 数组拷贝
+    const moved = this.session.selection.vertices;
     if (this._vertexPoints) {
       const attr = this._vertexPoints.geometry.attributes.position;
       for (const id of moved) {
@@ -650,13 +699,13 @@ export class MeshEditController {
       const attr = this._selectedVertices.geometry.attributes.position;
       // 与 _renderOverlay 构建选中层时一致：跳过越界顶点，用累计 offset 而非序号 i，避免点位错位
       let offset = 0;
-      moved.forEach(id => {
+      for (const id of moved) {
         if (vertices[id]) {
           this._worldVertex(vertices[id]);
           attr.setXYZ(offset, this._worldTemp.x, this._worldTemp.y, this._worldTemp.z);
           offset += 1;
         }
-      });
+      }
       attr.needsUpdate = true;
     }
     this.sceneManager?.emit('topologyoverlay');

@@ -22,8 +22,10 @@ const CANVAS_SAFE_TAGS = new Set([
 ]);
 
 function _isSafeAttrName(name) {
-  // 丢弃全部事件处理器（on*）与可执行上下文属性
-  return !name.startsWith('on') && !['style', 'srcdoc', 'formaction', 'xlink:href'].includes(name);
+  // 丢弃全部事件处理器（on*）与可执行上下文属性；
+  // srcset/usemap/poster/background/lowsrc 等可携带 data:/javascript: 载荷的 URL 属性一并移除
+  return !name.startsWith('on')
+    && !['style', 'srcdoc', 'formaction', 'xlink:href', 'srcset', 'usemap', 'poster', 'background', 'lowsrc', 'longdesc', 'dynsrc', 'xref'].includes(name);
 }
 
 function _isSafeUrl(value) {

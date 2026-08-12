@@ -243,7 +243,13 @@ export class BookmarkBar {
         el.tabIndex = 0;
         el.setAttribute('aria-pressed', t.classes.includes('active') ? 'true' : 'false');
         el.style.animationDelay = (idx * 0.04) + 's';
-        el.innerHTML = `<div class="bookmark-shape"></div><span class="bookmark-label">${t.label}</span>`;
+        // 用 createElement + textContent 组装，避免 label 经 innerHTML 注入
+        const shape = document.createElement('div');
+        shape.className = 'bookmark-shape';
+        const label = document.createElement('span');
+        label.className = 'bookmark-label';
+        label.textContent = t.label;
+        el.append(shape, label);
         el.addEventListener('animationend', () => {
           el.classList.remove('entering');
           el.style.animationDelay = '';
@@ -411,6 +417,7 @@ export class BookmarkBar {
         const source = sourceResources.find(item => item.name === file.name);
         const data = { name: file.name.replace(/\.[^.]+$/, ''), sourceResourceId: source?.id || '', sourceName: file.name, sourceType: file.type || '', sourceResources };
         const id = this.sceneManager.addExternalObject(object, data);
+        if (!id) { this.canvasRuntime.notify(`导入失败：对象 id 冲突`); return; }
         data.id = id;
         this.sceneManager.pushCommand(new AddExternalObjectCommand(this.sceneManager, object, data));
         this.sceneManager.selectObject(id);
@@ -433,6 +440,7 @@ export class BookmarkBar {
     } catch (error) {
       console.warn('[BookmarkBar] SimplifyModifier unavailable, using flat shading only');
     }
+    const materialMap = new Map(); // 原材质实例 -> 低面 clone，避免共享材质重复 clone/dispose
     object.traverse(child => {
       if (!child.isMesh || !child.geometry) return;
       const source = child.geometry;
@@ -447,14 +455,18 @@ export class BookmarkBar {
       if (geometry !== source) source.dispose();
       child.geometry = geometry;
       const materials = Array.isArray(child.material) ? child.material : [child.material];
+      // 多个子网格可能共享同一材质实例：按实例缓存 clone，每个实例只 clone/dispose 一次，
+      // 避免对已 dispose 的材质重复 clone/dispose 造成崩溃与状态丢失。
       const mappedMaterials = materials.map(material => {
+        if (materialMap.has(material)) return materialMap.get(material);
         const clone = material.clone();
         clone.flatShading = true;
         clone.needsUpdate = true;
+        materialMap.set(material, clone);
+        // 克隆后旧材质不再挂载到任何网格，及时释放其 GPU 材质资源（共享材质只释放一次）
+        material?.dispose?.();
         return clone;
       });
-      // 克隆材质后旧材质已不再挂载到网格，及时释放其 GPU 材质资源。
-      materials.forEach(material => material?.dispose?.());
       child.material = Array.isArray(child.material) ? mappedMaterials : mappedMaterials[0];
     });
   }
@@ -497,6 +509,7 @@ export class BookmarkBar {
     if (!result) return;
     const { mesh, data } = result;
     const id = this.sceneManager.addObject(mesh, data);
+    if (!id) return; // 冲突时已由 addObject 释放 mesh，直接中止
     this.sceneManager.pushCommand(new AddObjectCommand(this.sceneManager, this.factory, data));
     this.sceneManager.selectObject(id);
   }

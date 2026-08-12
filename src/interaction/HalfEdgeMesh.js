@@ -46,6 +46,8 @@ export class HalfEdgeMesh {
     // rebuild 后旧 halfedge 索引全部失效，必须清零
     this.vertices.forEach(vertex => { vertex.halfedge = -1; });
     this.faces.forEach(face => { face.halfedge = -1; });
+    // M14: 用整数 key（基数 vcount）替代 "{a}:{b}" 字符串编码，无序对/有序对均无碰撞且省去字符串分配
+    const vcount = this.vertices.length;
     const directed = new Map();
     this.faces.forEach(face => {
       const local = [];
@@ -53,7 +55,7 @@ export class HalfEdgeMesh {
         const halfedge = { id: this.halfedges.length, vertex, face: face.id, next: -1, prev: -1, twin: -1, edge: -1 };
         this.halfedges.push(halfedge); local.push(halfedge.id);
         const nextVertex = face.vertices[(index + 1) % face.vertices.length];
-        const directedKey = `${vertex}:${nextVertex}`;
+        const directedKey = vertex * vcount + nextVertex;
         if (!directed.has(directedKey)) directed.set(directedKey, halfedge.id);
         if (this.vertices[vertex] && this.vertices[vertex].halfedge === -1) this.vertices[vertex].halfedge = halfedge.id;
       });
@@ -65,14 +67,14 @@ export class HalfEdgeMesh {
     });
     this.halfedges.forEach(halfedge => {
       const target = this.halfedges[halfedge.next]?.vertex;
-      const twin = directed.get(`${target}:${halfedge.vertex}`);
+      const twin = directed.get(target * vcount + halfedge.vertex);
       if (twin != null && twin !== halfedge.id) halfedge.twin = twin;
     });
     const undirected = new Map();
     this.halfedges.forEach(halfedge => {
       const target = this.halfedges[halfedge.next]?.vertex;
       if (target == null) return;
-      const key = halfedge.vertex < target ? `${halfedge.vertex}:${target}` : `${target}:${halfedge.vertex}`;
+      const key = halfedge.vertex < target ? halfedge.vertex * vcount + target : target * vcount + halfedge.vertex;
       if (!undirected.has(key)) { undirected.set(key, this.edges.length); this.edges.push({ id: this.edges.length, halfedges: [] }); }
       const edgeId = undirected.get(key); halfedge.edge = edgeId; this.edges[edgeId].halfedges.push(halfedge.id);
     });
@@ -98,9 +100,6 @@ export class HalfEdgeMesh {
     if (!halfedge || target == null) return [];
     return [halfedge.vertex, target];
   }
-
-  boundaryEdges() { return this.edges.filter(edge => edge.halfedges.length === 1); }
-  nonManifoldEdges() { return this.edges.filter(edge => edge.halfedges.length > 2); }
 
   collectEdgeLoop(start) {
     if (!this.edges[start]) return new Set();

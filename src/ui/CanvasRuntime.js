@@ -60,7 +60,10 @@ export class CanvasRuntime {
     this._clearHistoryAndResources();
     this.page.querySelectorAll('.page-element').forEach(element => element.remove());
     this.page.classList.toggle('show-grid', Boolean(data.grid));
-    await Promise.all(data.elements.map(async item => {
+    // 性能：先同步建元素并按序插入，仅对资源 attach 做并发限制，
+    // 避免大画布一次性并发拉取全部 IndexedDB 资源造成尖峰与渲染阻塞。
+    const pending = [];
+    for (const item of data.elements) {
       const tag = ['div', 'img', 'p', 'span'].includes(item.tag) ? item.tag : 'div';
       const element = document.createElement(tag);
       element.className = 'page-element ' + String(item.className || '').split(/\s+/).filter(c => /^[a-zA-Z0-9_-]+$/.test(c) && c !== 'selected').join(' ');
@@ -70,12 +73,16 @@ export class CanvasRuntime {
       else element.textContent = item.text || '';
       if (item.resourceId) {
         element.dataset.resourceId = item.resourceId;
-        await this._attachResource(element, item.resourceId);
+        pending.push(this._attachResource(element, item.resourceId));
       } else if (item.src && /^(https?:|blob:)/i.test(item.src)) element.src = item.src;
       if (item.alt) element.alt = item.alt;
       if (item.style) element.setAttribute('style', sanitizeCanvasStyle(item.style));
       this.page.appendChild(element);
-    }));
+    }
+    const CONCURRENCY = 6;
+    for (let i = 0; i < pending.length; i += CONCURRENCY) {
+      await Promise.all(pending.slice(i, i + CONCURRENCY));
+    }
     this._clearSelection();
     this._notifyChange();
   }
@@ -333,7 +340,12 @@ export class CanvasRuntime {
       element.contentEditable = 'false';
       element.removeEventListener('blur', finish);
       if (observer) { observer.disconnect(); observer = null; }
-      if (before !== element.innerHTML) this._record('text', { element, from: before, to: element.innerHTML });
+      // 完成编辑时净化 innerHTML，防止可编辑区被注入恶意标签/事件
+      const sanitized = sanitizeCanvasHtml(element.innerHTML);
+      if (before !== sanitized) {
+        this._record('text', { element, from: before, to: sanitized });
+        element.innerHTML = sanitized;
+      }
     };
     element.addEventListener('blur', finish);
     // 监听元素被从 DOM 移除的情况，避免 blur 永不触发导致事件/observer 泄漏
@@ -643,9 +655,6 @@ export class CanvasRuntime {
     this._notifyTimer = 0;
     this.drag = null;
     this._clearSelection();
-    this.page?.querySelectorAll('.canvas-image').forEach(el => {
-      if (el.src.startsWith('blob:')) URL.revokeObjectURL(el.src);
-    });
     if (this.viewport) {
       this.viewport.removeEventListener('pointerdown', this._onPointerDown);
       this.viewport.removeEventListener('pointermove', this._onPointerMove);
@@ -655,18 +664,8 @@ export class CanvasRuntime {
     this.page?.removeEventListener('dblclick', this._onDoubleClick);
     this._imageInput?.remove();
     this._imageInput = null;
-    const urls = new Set();
-    [...this._history, ...this._future].forEach(action => {
-      const element = action?.element || action?.snapshot?.element;
-      if (element?.src?.startsWith('blob:')) urls.add(element.src);
-    });
-    this.page?.querySelectorAll('.canvas-image').forEach(element => {
-      if (element.src?.startsWith('blob:')) urls.add(element.src);
-    });
-    urls.forEach(url => URL.revokeObjectURL(url));
-    this._revokeResourceUrls();
-    this._history.length = 0;
-    this._future.length = 0;
+    // 统一回收历史/未来的 blob URL 与资源 URL 映射（复用 _clearHistoryAndResources 单一入口）
+    this._clearHistoryAndResources();
     this.onChange = null;
     this.viewport = null;
     this.page = null;

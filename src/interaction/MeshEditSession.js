@@ -26,15 +26,20 @@ export class MeshEditSession {
     this._gestureMoved = false;
     this._attributes = this._captureAttributes();
     this._materialGroups = mesh.geometry.groups.map(group => ({ ...group }));
+    // 预计算每个三角面的材质槽位查找表 O(face+group)，替代每面 .find() 的 O(face×group)
+    const faceCount = this.topology.faces.length;
+    const faceMaterial = new Array(faceCount).fill(0);
+    for (const group of this._materialGroups) {
+      const from = Math.max(0, Math.floor(group.start / 3));
+      const to = Math.min(faceCount, Math.floor((group.start + group.count - 1) / 3) + 1);
+      const slot = group.materialIndex ?? 0;
+      for (let i = from; i < to; i++) faceMaterial[i] = slot;
+    }
     // 每个三角面保存材质槽位，避免拓扑数量变化后仅按旧 start/count 截断分组。
     this.topology.faces.forEach((face, faceId) => {
-      face.materialIndex = this._materialIndexForFace(faceId);
+      face.materialIndex = faceMaterial[faceId];
     });
     this.lastError = '';
-  }
-
-  static fromGeometry(geometry) {
-    return HalfEdgeMesh.fromBufferGeometry(geometry).toTopology();
   }
 
   get counts() {
@@ -52,12 +57,6 @@ export class MeshEditSession {
       faces: this.topology.faces.map(face => [...face.vertices]),
       materialIndices: this.topology.faces.map(face => face.materialIndex ?? 0),
     };
-  }
-
-  _materialIndexForFace(faceId) {
-    const start = faceId * 3;
-    const group = this._materialGroups.find(item => start >= item.start && start < item.start + item.count);
-    return group?.materialIndex ?? 0;
   }
 
   diagnose() {
@@ -182,7 +181,7 @@ export class MeshEditSession {
     const bridgeDir = center1.clone().sub(center0);
     const va = new THREE.Vector3(...this.topology.vertices[loops[0][0]]);
     const vb = new THREE.Vector3(...this.topology.vertices[loops[0][1]]);
-    const vc = new THREE.Vector3(...this.topology.vertices[aligned[1] % aligned.length]);
+    const vc = new THREE.Vector3(...this.topology.vertices[aligned[1]]);
     const normal = new THREE.Vector3().crossVectors(vb.clone().sub(va), vc.clone().sub(va));
     if (normal.dot(bridgeDir) < 0) aligned = [...aligned].reverse();
     const before = this._capture();
@@ -457,12 +456,6 @@ export class MeshEditSession {
     this._writeGeometry();
     this.revision++;
     this.halfEdge = new HalfEdgeMesh(this.topology);
-    return true;
-  }
-
-  commitToScene(sceneManager) {
-    const id = this.mesh.userData?.sceneObjectId;
-    if (!id || !sceneManager?.syncGeometryFromMesh(id)) return false;
     return true;
   }
 

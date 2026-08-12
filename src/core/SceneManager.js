@@ -16,6 +16,20 @@ function genId() { return `obj-${Date.now().toString(36)}-${++_idCounter}`; }
 // TextureLoader 无状态，模块级复用，避免每次加载都新建实例
 const _textureLoader = new THREE.TextureLoader();
 
+/**
+ * 材质色值校验：非法/缺失值回退默认色，避免 color.set() 抛错。
+ * 接受 number(0~0xffffff)、合法 CSS 颜色字符串、THREE.Color 实例；
+ * 其余（null、空串、畸形字符串、NaN 等）一律回退 fallback。
+ */
+function _sanitizeColor(value, fallback = '#cccccc') {
+  if (typeof value === 'number' && isFinite(value) && value >= 0) return value;
+  if (typeof value === 'string' && value !== '') {
+    try { new THREE.Color(value); return value; } catch (_) { return fallback; }
+  }
+  if (value && value.isColor) return value;
+  return fallback;
+}
+
 export class SceneManager {
   constructor(scene, geometryFactory = null, resourceStore = null) {
     this.scene = scene;
@@ -26,17 +40,18 @@ export class SceneManager {
     Object.assign(this, createEmitter()); // M5: 共享事件实现（on/emit）
     this._undoStack = [];
     this._redoStack = [];
-    this._meshList = [];
+    this._meshList = new Set(); // M13: Set 化，removeObject/dispose 时 O(1) 增删
     this._suppressEvents = false; // M7: 批量恢复期间抑制 objectadded/scenechanged
     this._nameCounter = 0;        // L2: 独立递增的默认命名计数器
+    this._textureCache = new Map(); // resourceId -> { texture, refs }：按资源共享纹理，避免重复加载/多份 objectURL
   }
 
   // ===== Object management =====
   addObject(mesh, data) {
     if (!mesh || !data) return null;
     const id = data.id || genId();
-    // 防止重复 id 静默覆盖已有对象（与 addExternalObject 行为保持一致）
-    if (this.objects.has(id)) return id;
+    // 防止重复 id 静默覆盖已有对象；冲突时释放传入 mesh 并返回 null，让调用方提前中止
+    if (this.objects.has(id)) { this._disposeObjectTree(mesh); return null; }
     data.id = id;
     if (!data.name) data.name = this._defaultName(data.type);
     if (!data.transform) {
@@ -53,7 +68,7 @@ export class SceneManager {
     mesh.userData.sceneObjectId = id;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
-    this._meshList.push(mesh);
+    this._meshList.add(mesh);
     this.scene.add(mesh);
     if (!this._suppressEvents) {
       this.emit('objectadded', { id, data });
@@ -65,7 +80,7 @@ export class SceneManager {
   addExternalObject(object, data = {}) {
     if (!object) return null;
     const id = data.id || genId();
-    if (this.objects.has(id)) return id;
+    if (this.objects.has(id)) { this._disposeObjectTree(object); return null; }
     const firstMesh = object.isMesh ? object : object.getObjectByProperty?.('isMesh', true);
     const geometry = data.geometry || {};
     if (!geometry.topology && firstMesh?.geometry?.attributes?.position) {
@@ -103,7 +118,7 @@ export class SceneManager {
         child.userData.sceneObjectId = id;
         child.castShadow = true;
         child.receiveShadow = true;
-        this._meshList.push(child);
+        this._meshList.add(child);
       }
     });
     this.scene.add(object);
@@ -129,13 +144,9 @@ export class SceneManager {
     this.objects.delete(id);
     if (obj.mesh.userData) delete obj.mesh.userData.sceneObjectId;
     if (obj.external) {
-      obj.mesh.traverse?.(child => {
-        const meshIndex = this._meshList.indexOf(child);
-        if (meshIndex !== -1) this._meshList.splice(meshIndex, 1);
-      });
+      obj.mesh.traverse?.(child => { this._meshList.delete(child); });
     } else {
-      const meshIndex = this._meshList.indexOf(obj.mesh);
-      if (meshIndex !== -1) this._meshList.splice(meshIndex, 1);
+      this._meshList.delete(obj.mesh);
     }
     this.emit('objectremoved', { id });
     if (wasSelected) this.emit('selectionchange', { selection: [...this.selection] });
@@ -145,7 +156,7 @@ export class SceneManager {
   getObject(id) { return this.objects.get(id) || null; }
   getAllObjects() { return [...this.objects.values()].map(o => o.data); }
   get count() { return this.objects.size; }
-  get meshes() { return this._meshList; }
+  get meshes() { return [...this._meshList]; }
 
   // ===== Selection =====
   selectObject(id, additive = false) {
@@ -182,33 +193,19 @@ export class SceneManager {
     this.emit('scenechanged');
   }
 
+  /** 统一应用到 mesh 的完整变换（缺失分量用默认值）。updateTransform 的增量路径不适用。 */
+  _applyTransform(mesh, transform) {
+    if (!mesh || !transform) return;
+    mesh.position.set(transform.position?.[0] ?? 0, transform.position?.[1] ?? 0, transform.position?.[2] ?? 0);
+    mesh.rotation.set(transform.rotation?.[0] ?? 0, transform.rotation?.[1] ?? 0, transform.rotation?.[2] ?? 0);
+    mesh.scale.set(transform.scale?.[0] ?? 1, transform.scale?.[1] ?? 1, transform.scale?.[2] ?? 1);
+  }
+
   syncTransformFromMesh(id) {
     if (!this._syncData(id)) return;
     const obj = this.objects.get(id);
     this.emit('objectchanged', { id, data: obj.data });
     this.emit('scenechanged');
-  }
-
-  syncGeometryFromMesh(id, { emit = true } = {}) {
-    const obj = this.objects.get(id);
-    const mesh = obj?.mesh?.isMesh ? obj.mesh : obj?.mesh?.getObjectByProperty?.('isMesh', true);
-    if (!mesh?.geometry?.attributes?.position) return false;
-    const geometry = mesh.geometry;
-    const position = geometry.attributes.position;
-    const index = geometry.index;
-    const topology = {
-      vertices: Array.from({ length: position.count }, (_, i) => [position.getX(i), position.getY(i), position.getZ(i)]),
-      indices: index ? [...index.array] : [...Array(position.count).keys()],
-    };
-    const uv = geometry.attributes.uv;
-    if (uv && uv.count === position.count) topology.uv = [...uv.array];
-    topology.groups = geometry.groups.map(group => ({ ...group }));
-    obj.data.geometry = { ...(obj.data.geometry || {}), topology };
-    if (emit) {
-      this.emit('objectchanged', { id, data: obj.data });
-      this.emit('scenechanged');
-    }
-    return true;
   }
 
   applyTopologyData(id, topology, { emit = true } = {}) {
@@ -244,15 +241,11 @@ export class SceneManager {
 
   _applyTransformAndMaterial(obj) {
     const t = obj.data.transform;
-    if (t) {
-      obj.mesh.position.set(t.position?.[0] ?? 0, t.position?.[1] ?? 0, t.position?.[2] ?? 0);
-      obj.mesh.rotation.set(t.rotation?.[0] ?? 0, t.rotation?.[1] ?? 0, t.rotation?.[2] ?? 0);
-      obj.mesh.scale.set(t.scale?.[0] ?? 1, t.scale?.[1] ?? 1, t.scale?.[2] ?? 1);
-    }
+    this._applyTransform(obj.mesh, t);
     const mat = obj.data.material;
     if (mat) obj.mesh.traverse?.(node => {
       const materials = Array.isArray(node.material) ? node.material : [node.material];
-      materials.forEach(material => { if (material?.color) material.color.set(mat.color || '#cccccc'); if (material && 'metalness' in material) material.metalness = mat.metalness ?? 0.1; if (material && 'roughness' in material) material.roughness = mat.roughness ?? 0.7; });
+      materials.forEach(material => { if (material?.color) material.color.set(_sanitizeColor(mat.color)); if (material && 'metalness' in material) material.metalness = mat.metalness ?? 0.1; if (material && 'roughness' in material) material.roughness = mat.roughness ?? 0.7; });
     });
   }
 
@@ -352,19 +345,14 @@ export class SceneManager {
     if (!geo) return null;
     const materialData = Array.isArray(record.material) ? record.material : [record.material || {}];
     const materials = materialData.map(item => new THREE.MeshStandardMaterial({
-      color: item?.color || '#cccccc', metalness: item?.metalness ?? 0.1, roughness: item?.roughness ?? 0.7,
-      emissive: item?.emissive || '#000000', emissiveIntensity: item?.emissiveIntensity ?? 1,
+      color: _sanitizeColor(item?.color), metalness: item?.metalness ?? 0.1, roughness: item?.roughness ?? 0.7,
+      emissive: _sanitizeColor(item?.emissive, '#000000'), emissiveIntensity: item?.emissiveIntensity ?? 1,
       opacity: item?.opacity ?? 1, transparent: Boolean(item?.transparent), depthWrite: item?.depthWrite ?? true,
       side: Number.isInteger(item?.side) ? item.side : THREE.FrontSide, wireframe: Boolean(item?.wireframe),
     }));
     const mesh = new THREE.Mesh(geo, materials.length === 1 ? materials[0] : materials);
     mesh.name = record.name || '';
-    const transform = record.transform;
-    if (transform) {
-      mesh.position.set(transform.position?.[0] ?? 0, transform.position?.[1] ?? 0, transform.position?.[2] ?? 0);
-      mesh.rotation.set(transform.rotation?.[0] ?? 0, transform.rotation?.[1] ?? 0, transform.rotation?.[2] ?? 0);
-      mesh.scale.set(transform.scale?.[0] ?? 1, transform.scale?.[1] ?? 1, transform.scale?.[2] ?? 1);
-    }
+    this._applyTransform(mesh, record.transform);
     return mesh;
   }
 
@@ -373,22 +361,50 @@ export class SceneManager {
    *  alive 用于加载期间对象被删除/整体 disposition 时中止，避免挂到已释放材质造成泄漏。 */
   async _loadMaterialTexture(material, prop, resourceId, alive = () => true) {
     if (!resourceId || !this.resourceStore || !material) return;
-    let record;
-    try { record = await this.resourceStore.get(resourceId); } catch (_) { return; }
-    if (!record?.blob) return;
-    const url = URL.createObjectURL(record.blob);
-    try {
-      const texture = await _textureLoader.loadAsync(url);
-      if (!alive()) { texture.dispose(); return; } // 加载期间对象已释放，丢弃纹理
-      texture.userData.resourceId = resourceId;
-      // L2: 赋值前释放同通道旧纹理，避免重复挂载泄漏 GPU 资源
-      if (material[prop]?.isTexture) material[prop].dispose();
-      material[prop] = texture;
-      material.needsUpdate = true;
-    } catch (error) {
-      console.warn('[SceneManager] texture restore failed:', error);
-    } finally {
-      URL.revokeObjectURL(url);
+    let entry = this._textureCache.get(resourceId);
+    if (!entry) {
+      let record;
+      try { record = await this.resourceStore.get(resourceId); } catch (_) { return; }
+      if (!record?.blob) return;
+      const url = URL.createObjectURL(record.blob);
+      try {
+        const texture = await _textureLoader.loadAsync(url);
+        if (!alive()) { texture.dispose(); return; } // 加载期间对象已释放，丢弃纹理
+        texture.userData.resourceId = resourceId;
+        entry = { texture, refs: 0 };
+        this._textureCache.set(resourceId, entry);
+      } catch (error) {
+        console.warn('[SceneManager] texture restore failed:', error);
+        return;
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    }
+    entry.refs++;
+    if (!alive()) { this._unrefTexture(resourceId, entry); return; }
+    // 赋值前释放同通道旧纹理；若旧纹理是共享缓存项则走引用计数，避免误伤其他材质
+    const old = material[prop];
+    if (old?.isTexture && old !== entry.texture) this._disposeTexture(old);
+    material[prop] = entry.texture;
+    material.needsUpdate = true;
+  }
+
+  /** 释放纹理：位于共享缓存时按引用计数回收，否则直接 dispose */
+  _disposeTexture(texture) {
+    if (!texture?.isTexture) return;
+    const rid = texture.userData?.resourceId;
+    const entry = rid && this._textureCache.get(rid);
+    if (entry) this._unrefTexture(rid, entry);
+    else texture.dispose();
+  }
+
+  /** 共享纹理引用计数 -1，归零时移除缓存并释放 GPU 纹理 */
+  _unrefTexture(resourceId, entry) {
+    if (!entry) return;
+    entry.refs--;
+    if (entry.refs <= 0) {
+      this._textureCache.delete(resourceId);
+      entry.texture.dispose();
     }
   }
 
@@ -398,7 +414,13 @@ export class SceneManager {
     const list = Array.isArray(materialData) ? materialData : materialData ? [materialData] : [];
     if (!list.length) return;
     const objectId = mesh.userData?.sceneObjectId;
-    const alive = () => this.scene != null && (!objectId || this.objects.has(objectId));
+    const alive = () => {
+      if (!this.scene) return false;
+      if (objectId) return this.objects.has(objectId);
+      // external 恢复期间对象尚未写入 this.objects/未设 sceneObjectId：
+      // 以根节点是否仍挂接在场景中作为存活依据，避免贴图挂到已释放材质造成泄漏
+      return this.scene.getObjectById(mesh.id) != null;
+    };
     const tasks = [];
     mesh.traverse?.(node => {
       if (!node.material) return;
@@ -480,17 +502,13 @@ export class SceneManager {
           writeTopologyToGeometry(mesh.geometry, topology);
         }
         // Apply saved transform
-        const t = objData.transform;
-        if (t) {
-          mesh.position.set(t.position?.[0] ?? 0, t.position?.[1] ?? 0, t.position?.[2] ?? 0);
-          mesh.rotation.set(t.rotation?.[0] ?? 0, t.rotation?.[1] ?? 0, t.rotation?.[2] ?? 0);
-          mesh.scale.set(t.scale?.[0] ?? 1, t.scale?.[1] ?? 1, t.scale?.[2] ?? 1);
-        }
+        this._applyTransform(mesh, objData.transform);
         // Apply saved material
         const mat = objData.material;
         if (mat) {
           const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
           materials.forEach((material, index) => {
+            if (!material) return; // 空值安全：恢复的 mesh 可能带 undefined 材质槽
             // M2: 用 index 替代 indexOf（O(n²)→O(n)），用 ?? 替代 || 避免 falsy 值错误回退
             const value = Array.isArray(mat) ? (mat[index] ?? mat[0]) : mat;
             material.color?.set(value?.color || '#cccccc');
@@ -573,15 +591,7 @@ export class SceneManager {
 
   /** 释放从加载器得到的对象树（含纹理/材质/几何体），用于加载被中止时避免 GPU 泄漏 */
   _disposeObjectTree(root) {
-    root?.traverse?.(node => {
-      node.geometry?.dispose();
-      const materials = Array.isArray(node.material) ? node.material : [node.material];
-      materials.forEach(material => {
-        if (!material) return;
-        Object.values(material).forEach(value => { if (value?.isTexture) value.dispose(); });
-        material.dispose();
-      });
-    });
+    root?.traverse?.(node => this._disposeNode(node, () => true));
   }
 
   /** M1: 来源3 — 由 serialized meshes 重建外部模型 */
@@ -614,13 +624,8 @@ export class SceneManager {
 
   /** M1: external 模型恢复后的统一收尾（命名/变换/阴影/入场景） */
   _finalizeRestoredExternal(mesh, objData) {
-    const transform = objData.transform;
     mesh.name = objData.name || mesh.name || '导入模型';
-    if (transform) {
-      mesh.position.set(transform.position?.[0] ?? 0, transform.position?.[1] ?? 0, transform.position?.[2] ?? 0);
-      mesh.rotation.set(transform.rotation?.[0] ?? 0, transform.rotation?.[1] ?? 0, transform.rotation?.[2] ?? 0);
-      mesh.scale.set(transform.scale?.[0] ?? 1, transform.scale?.[1] ?? 1, transform.scale?.[2] ?? 1);
-    }
+    this._applyTransform(mesh, objData.transform);
     mesh.traverse?.(child => {
       if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; }
     });
@@ -675,7 +680,7 @@ export class SceneManager {
     }
     this.objects.clear();
     this.selection.clear();
-    this._meshList.length = 0;
+    this._meshList.clear();
   }
 
   /** 释放单个节点（几何体 + 材质 + 纹理）— 纹理是否释放由回调决定，供 removeObject 与 _disposeAllObjects 复用 */
@@ -685,7 +690,13 @@ export class SceneManager {
     materials.forEach(material => {
       if (!material) return;
       Object.values(material).forEach(value => {
-        if (value?.isTexture && shouldDisposeTexture(value)) value.dispose();
+        if (!value?.isTexture) return;
+        // 共享缓存纹理按引用计数回收（每处引用各减一，不受跨对象实例去重影响）；
+        // 非缓存纹理（如 GLTF 内部共享材质）仍走回调去重，避免重复 dispose。
+        const rid = value.userData?.resourceId;
+        const entry = rid && this._textureCache.get(rid);
+        if (entry) this._unrefTexture(rid, entry);
+        else if (shouldDisposeTexture(value)) value.dispose();
       });
       material.dispose();
     });
@@ -701,6 +712,9 @@ export class SceneManager {
     [...this._undoStack, ...this._redoStack].forEach(command => command.dispose?.());
     this._undoStack = [];
     this._redoStack = [];
+    // 兜底：引用计数归零后仍残留的共享纹理直接释放
+    this._textureCache.forEach(entry => entry?.texture?.dispose());
+    this._textureCache.clear();
     this.clear();
     this.scene = null;
     this.factory = null;

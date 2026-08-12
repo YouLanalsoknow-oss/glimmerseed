@@ -16,6 +16,8 @@ export class TransformController {
     this._box = null;
     this._topologyEditing = false;
     this._transformBefore = null;
+    this._dragListener = null;
+    this._objectChangeListener = null;
   }
 
   init(renderer, viewport, sceneManager) {
@@ -31,7 +33,7 @@ export class TransformController {
     viewport.scene.add(helper);
 
     // Disable orbit controls during gizmo drag
-    this.controls.addEventListener('dragging-changed', (event) => {
+    this._dragListener = (event) => {
       this._isDragging = event.value;
       viewport.controls.enabled = !event.value;
       const mesh = this.controls.object;
@@ -46,10 +48,11 @@ export class TransformController {
         }
         this._transformBefore = null;
       }
-    });
+    };
+    this.controls.addEventListener('dragging-changed', this._dragListener);
 
     // Sync transform changes back to data model — O(1) via userData
-    this.controls.addEventListener('objectChange', () => {
+    this._objectChangeListener = () => {
       const mesh = this.controls.object;
       if (!mesh) return;
       const id = mesh.userData?.sceneObjectId;
@@ -57,7 +60,8 @@ export class TransformController {
         this.sceneManager.syncTransformFromMesh(id);
         if (this._box) this._box.setFromObject(mesh);
       }
-    });
+    };
+    this.controls.addEventListener('objectChange', this._objectChangeListener);
 
     // Auto-attach/detach on selection change
     this._offSelection = sceneManager.on('selectionchange', ({ selection }) => {
@@ -118,7 +122,12 @@ export class TransformController {
   dispose() {
     this._offSelection?.(); this._offSelection = null;
     this._offObjectRemoved?.(); this._offObjectRemoved = null;
-    this.controls?.dispose();
+    // 移除控件的拖动/变换监听器，避免 dispose 后仍被回调
+    if (this.controls) {
+      if (this._dragListener) { this.controls.removeEventListener('dragging-changed', this._dragListener); this._dragListener = null; }
+      if (this._objectChangeListener) { this.controls.removeEventListener('objectChange', this._objectChangeListener); this._objectChangeListener = null; }
+      this.controls.dispose();
+    }
     this._hideBox();
     this.controls = null;
   }
