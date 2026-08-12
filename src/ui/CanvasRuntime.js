@@ -50,7 +50,9 @@ export class CanvasRuntime {
 
   serialize() {
     if (!this.page) return { version: 1, elements: [] };
-    return { version: 3, grid: this.page.classList.contains('show-grid'), elements: [...this.page.querySelectorAll('.page-element')].map(element => ({ tag: element.tagName.toLowerCase(), className: String(element.className), text: element.textContent, html: element.innerHTML, resourceId: element.dataset.resourceId || '', src: element.dataset.resourceId ? '' : (element.src?.startsWith('data:') ? '' : (element.src || '')), alt: element.alt || '', style: element.getAttribute('style') || '' })) };
+    // 超限 html 会令整份场景存档校验失败，此处降级为纯文本，避免单元素拖垮全部对象的自动保存
+    const MAX_HTML = 100000;
+    return { version: 3, grid: this.page.classList.contains('show-grid'), elements: [...this.page.querySelectorAll('.page-element')].map(element => ({ tag: element.tagName.toLowerCase(), className: String(element.className), text: element.textContent, html: element.innerHTML.length > MAX_HTML ? element.textContent : element.innerHTML, resourceId: element.dataset.resourceId || '', src: element.dataset.resourceId ? '' : (element.src?.startsWith('data:') ? '' : (element.src || '')), alt: element.alt || '', style: element.getAttribute('style') || '' })) };
   }
 
   getResourceIds() { return [...new Set([...this.page?.querySelectorAll('[data-resource-id]') || []].map(el => el.dataset.resourceId).filter(Boolean))]; }

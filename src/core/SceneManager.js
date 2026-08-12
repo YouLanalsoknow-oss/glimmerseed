@@ -30,6 +30,7 @@ export class SceneManager {
     this._suppressEvents = false; // M7: 批量恢复期间抑制 objectadded/scenechanged
     this._nameCounter = 0;        // L2: 独立递增的默认命名计数器
     this._textureCache = new Map(); // resourceId -> { texture, refs }：按资源共享纹理，避免重复加载/多份 objectURL
+    this._textureInFlight = new Map(); // resourceId -> Promise<entry>：并发加载去重，防同一资源重复加载与 refs 错乱
   }
 
   // ===== Object management =====
@@ -349,22 +350,19 @@ export class SceneManager {
     if (!resourceId || !this.resourceStore || !material) return;
     let entry = this._textureCache.get(resourceId);
     if (!entry) {
-      let record;
-      try { record = await this.resourceStore.get(resourceId); } catch (_) { return; }
-      if (!record?.blob) return;
-      const url = URL.createObjectURL(record.blob);
-      try {
-        const texture = await _textureLoader.loadAsync(url);
-        if (!alive()) { texture.dispose(); return; } // 加载期间对象已释放，丢弃纹理
-        texture.userData.resourceId = resourceId;
-        entry = { texture, refs: 0 };
-        this._textureCache.set(resourceId, entry);
-      } catch (error) {
-        console.warn('[SceneManager] texture restore failed:', error);
-        return;
-      } finally {
-        URL.revokeObjectURL(url);
+      // 并发去重：同一资源被多个材质槽同时引用时复用同一 in-flight Promise，
+      // 避免各自加载覆盖缓存键，导致 refs 引用计数错乱/提前释放
+      let task = this._textureInFlight.get(resourceId);
+      if (!task) {
+        task = this._loadTextureRecord(resourceId);
+        this._textureInFlight.set(resourceId, task);
       }
+      try {
+        entry = await task;
+      } finally {
+        this._textureInFlight.delete(resourceId);
+      }
+      if (!entry) return;
     }
     entry.refs++;
     if (!alive()) { this._unrefTexture(resourceId, entry); return; }
@@ -373,6 +371,26 @@ export class SceneManager {
     if (old?.isTexture && old !== entry.texture) this._disposeTexture(old);
     material[prop] = entry.texture;
     material.needsUpdate = true;
+  }
+
+  /** 加载单个资源并写入共享缓存，返回缓存 entry；失败/缺失返回 null。内部供 in-flight 去重复用。 */
+  async _loadTextureRecord(resourceId) {
+    let record;
+    try { record = await this.resourceStore.get(resourceId); } catch (_) { return null; }
+    if (!record?.blob) return null;
+    const url = URL.createObjectURL(record.blob);
+    try {
+      const texture = await _textureLoader.loadAsync(url);
+      texture.userData.resourceId = resourceId;
+      const entry = { texture, refs: 0 };
+      this._textureCache.set(resourceId, entry);
+      return entry;
+    } catch (error) {
+      console.warn('[SceneManager] texture restore failed:', error);
+      return null;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   }
 
   /** 释放纹理：位于共享缓存时按引用计数回收，否则直接 dispose */
@@ -714,6 +732,7 @@ export class SceneManager {
     // 兜底：引用计数归零后仍残留的共享纹理直接释放
     this._textureCache.forEach(entry => entry?.texture?.dispose());
     this._textureCache.clear();
+    this._textureInFlight.clear();
     this.clear();
     this.scene = null;
     this.factory = null;

@@ -420,8 +420,7 @@ export class BookmarkBar {
         const data = { name: file.name.replace(/\.[^.]+$/, ''), sourceResourceId: source?.id || '', sourceName: file.name, sourceType: file.type || '', sourceResources };
         const id = this.sceneManager.addExternalObject(object, data);
         if (!id) {
-          // 对象未入场景：释放其几何/材质/纹理，避免 GPU 资源泄漏
-          object.traverse?.(node => this.sceneManager._disposeNode(node, () => true));
+          // addExternalObject 在 id 冲突时已内部释放对象树，此处无需重复释放
           this.canvasRuntime.notify(`导入失败：对象 id 冲突`);
           return;
         }

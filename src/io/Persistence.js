@@ -141,7 +141,8 @@ export class Persistence {
       const referencedIds = new Set(canvasRuntime ? canvasRuntime.getResourceIds() : []);
       const sceneIds = sceneManager?.getReferencedResourceIds?.() || [];
       sceneIds.forEach(id => { if (id) referencedIds.add(id); });
-      await this._resourceStore.removeUnreferenced([...referencedIds]);
+      // 保留集为空时跳过清理：避免引用集计算异常时误删全部 IndexedDB 资源（数据丢失）
+      if (referencedIds.size > 0) await this._resourceStore.removeUnreferenced([...referencedIds]);
     }
     return true;
   }
