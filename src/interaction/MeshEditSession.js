@@ -478,10 +478,12 @@ export class MeshEditSession {
 
   _rebuildEdges() {
     const edges = []; const edgeMap = new Map();
+    // 整数 key（a*vcount+b，a<b 归一化）与 HalfEdgeMesh.rebuild 一致，避免字符串拼接的分配开销
+    const vcount = this.topology.vertices.length;
     this.topology.faces.forEach((face, faceId) => {
       face.edges = face.vertices.map((a, n) => {
         const b = face.vertices[(n + 1) % 3];
-        const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+        const key = a < b ? a * vcount + b : b * vcount + a;
         if (!edgeMap.has(key)) { edgeMap.set(key, edges.length); edges.push({ vertices: [a, b], faces: [] }); }
         const id = edgeMap.get(key); edges[id].faces.push(faceId); return id;
       });
@@ -514,7 +516,12 @@ export class MeshEditSession {
     const { vertices, faces } = this.topology;
     const positions = new Float32Array(vertices.length * 3);
     vertices.forEach((v, i) => positions.set(v, i * 3));
-    const indices = new Uint32Array(faces.flatMap(face => face.vertices));
+    // 面均为三角形：预分配 Uint32Array 直接填充，省去 flatMap 的中间数组分配
+    const indices = new Uint32Array(faces.length * 3);
+    for (let i = 0; i < faces.length; i++) {
+      const fv = faces[i].vertices;
+      indices[i * 3] = fv[0]; indices[i * 3 + 1] = fv[1]; indices[i * 3 + 2] = fv[2];
+    }
     this.geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     this.geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     const sameVertexCount = this._attributes.positionCount === vertices.length;
