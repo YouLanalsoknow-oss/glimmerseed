@@ -348,22 +348,19 @@ export class BookmarkBar {
     this.canvasRuntime.notify(message);
   }
 
-  _pickFile(accept, callback) {
+  _pickFiles(accept, multiple, callback) {
     const input = document.createElement('input');
-    input.type = 'file'; input.accept = accept;
-    input.addEventListener('change', () => { const file = input.files?.[0]; if (file) callback(file); input.remove(); }, { once: true });
-    input.click();
-  }
-
-  _pickFiles(accept, callback) {
-    const input = document.createElement('input');
-    input.type = 'file'; input.accept = accept; input.multiple = true;
-    input.addEventListener('change', () => { const files = [...(input.files || [])]; if (files.length) callback(files); input.remove(); }, { once: true });
+    input.type = 'file'; input.accept = accept; input.multiple = Boolean(multiple);
+    input.addEventListener('change', () => {
+      const files = [...(input.files || [])];
+      if (files.length) callback(multiple ? files : files[0]);
+      input.remove();
+    }, { once: true });
     input.click();
   }
 
   _importPSD() {
-    this._pickFile('.psd,image/vnd.adobe.photoshop', (file) => this.canvasRuntime.importPSD(file));
+    this._pickFiles('.psd,image/vnd.adobe.photoshop', false, (file) => this.canvasRuntime.importPSD(file));
   }
 
   async _importModel(lowPoly = false) {
@@ -371,7 +368,7 @@ export class BookmarkBar {
       this.canvasRuntime.notify('正在导入模型中，请稍候');
       return;
     }
-    this._pickFiles('.glb,.gltf,.obj,.bin,.png,.jpg,.jpeg,.webp,.mtl,model/gltf-binary,model/gltf+json,text/plain,image/*', async (files) => {
+    this._pickFiles('.glb,.gltf,.obj,.bin,.png,.jpg,.jpeg,.webp,.mtl,model/gltf-binary,model/gltf+json,text/plain,image/*', true, async (files) => {
       if (this._importing) return;
       this._importing = true;
       let objectUrl = null;

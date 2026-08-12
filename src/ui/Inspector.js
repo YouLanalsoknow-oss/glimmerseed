@@ -125,7 +125,8 @@ export class Inspector {
       });
     }
 
-    body.querySelectorAll('[data-t]').forEach(input => {
+    // 复用已缓存的 _transformInputs，避免对 [data-t] 重复 querySelectorAll
+    this._transformInputs.forEach(input => {
       input.addEventListener('input', () => this._onTransformInput(input));
       input.addEventListener('focus', () => this._beginSnapshot());
       input.addEventListener('blur', () => this._commitSnapshot());
