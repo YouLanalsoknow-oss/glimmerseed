@@ -44,7 +44,8 @@ export class ResourceStore {
   async put(blob, metadata = {}) {
     if (!(blob instanceof Blob)) throw new TypeError('资源必须是 Blob');
     const run = async () => {
-      const id = metadata.id || this._id();
+      // 始终生成新 id：不接受外部传入 id，避免不可信数据覆盖已存资源（upsert 语义）
+      const id = this._id();
       const record = { id, blob, name: metadata.name || 'resource', type: metadata.type || blob.type || 'application/octet-stream', size: blob.size, updatedAt: Date.now() };
       const db = await this.init();
       if (this._usedBytes < 0) await this._ensureUsage();

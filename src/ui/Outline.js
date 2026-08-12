@@ -17,6 +17,9 @@ export class Outline {
     this._offName = this.sceneManager.on('namechanged', () => this.render());
     // 选择切换只更新 active class，不重建整个列表
     this._offSelection = this.sceneManager.on('selectionchange', () => this._updateSelection());
+    // 事件委托：容器上只绑一次点击监听，避免每次 render 全量重建后重新 querySelectorAll + 逐个绑定
+    const list = document.getElementById('outlineList');
+    if (list) list.addEventListener('click', this._onListClick);
   }
 
   dispose() {
@@ -24,7 +27,25 @@ export class Outline {
     this._offRemoved?.(); this._offRemoved = null;
     this._offName?.(); this._offName = null;
     this._offSelection?.(); this._offSelection = null;
+    const list = document.getElementById('outlineList');
+    if (list) list.removeEventListener('click', this._onListClick);
   }
+
+  _onListClick = (e) => {
+    const del = e.target.closest('[data-del]');
+    if (del) {
+      e.stopPropagation();
+      const id = del.dataset.del;
+      const cmd = new RemoveObjectCommand(this.sceneManager, this.factory, id);
+      const obj = this.sceneManager.getObject(id);
+      // 外部模型交给命令保留引用，确保撤销可以恢复原对象
+      this.sceneManager.removeObject(id, { dispose: !obj?.external });
+      this.sceneManager.pushCommand(cmd);
+      return;
+    }
+    const item = e.target.closest('.outline-item');
+    if (item) this.sceneManager.selectObject(item.dataset.id, e.shiftKey);
+  };
 
   /** 轻量选择更新 — 只切换已有 DOM 的 active class */
   _updateSelection() {
@@ -57,24 +78,5 @@ export class Outline {
         <span class="del" data-del="${escapeHtml(obj.id)}" title="删除">\u00d7</span>
       </div>
     `).join('');
-
-    list.querySelectorAll('.outline-item').forEach(item => {
-      item.addEventListener('click', (e) => {
-        if (e.target.dataset.del) return;
-        this.sceneManager.selectObject(item.dataset.id, e.shiftKey);
-      });
-    });
-
-    list.querySelectorAll('[data-del]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const id = btn.dataset.del;
-        const cmd = new RemoveObjectCommand(this.sceneManager, this.factory, id);
-        const obj = this.sceneManager.getObject(id);
-        // 外部模型交给命令保留引用，确保撤销可以恢复原对象
-        this.sceneManager.removeObject(id, { dispose: !obj?.external });
-        this.sceneManager.pushCommand(cmd);
-      });
-    });
   }
 }

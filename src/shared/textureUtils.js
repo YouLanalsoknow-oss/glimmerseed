@@ -8,6 +8,12 @@
  * @param {string|null} excludedId 需要排除的对象 id（通常为被删除/释放的对象自身）
  * @returns {boolean} 是否仍被其他对象使用
  */
+/** 标准贴图槽位 — 仅比较这些属性，避免遍历全部材质属性造成误判与数组分配 */
+const TEXTURE_SLOTS = [
+  'map', 'normalMap', 'aoMap', 'emissiveMap', 'roughnessMap',
+  'metalnessMap', 'bumpMap', 'displacementMap', 'alphaMap', 'lightMap',
+];
+
 export function isTextureUsedByAnyOther(records, texture, excludedId = null) {
   if (!records || !texture) return false;
   for (const record of records) {
@@ -17,7 +23,12 @@ export function isTextureUsedByAnyOther(records, texture, excludedId = null) {
     record.mesh?.traverse?.(node => {
       if (used || !node.material) return;
       const materials = Array.isArray(node.material) ? node.material : [node.material];
-      used = materials.some(material => Object.values(material || {}).some(value => value === texture));
+      for (const material of materials) {
+        if (!material) continue;
+        for (const slot of TEXTURE_SLOTS) {
+          if (material[slot] === texture) { used = true; return; }
+        }
+      }
     });
     if (used) return true;
   }

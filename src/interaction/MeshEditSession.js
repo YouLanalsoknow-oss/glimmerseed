@@ -335,7 +335,7 @@ export class MeshEditSession {
       this._writePositionsOnly(ids);
     } else {
       this._writeGeometry();
-      this.halfEdge = new HalfEdgeMesh(this.topology);
+      this._syncHalfEdgePositions();
       this.revision++;
     }
     return true;
@@ -345,7 +345,7 @@ export class MeshEditSession {
   endGesture() {
     if (this._gesture && this._gestureMoved) {
       this._writeGeometry();
-      this.halfEdge = new HalfEdgeMesh(this.topology);
+      this._syncHalfEdgePositions();
       this.revision++;
     }
     this._gesture = false;

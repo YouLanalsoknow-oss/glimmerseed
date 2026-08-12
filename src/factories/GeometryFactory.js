@@ -23,9 +23,10 @@ function finiteNumber(value, fallback, minimum = -Infinity) {
   return Number.isFinite(number) && number >= minimum ? number : fallback;
 }
 
-function segmentCount(value, fallback, minimum = 1) {
+/** 细分段数：夹到 [minimum, maximum]，防外部传入超大值导致几何体 OOM 崩溃 */
+function segmentCount(value, fallback, minimum = 1, maximum = 1000) {
   const number = Number(value);
-  return Number.isFinite(number) ? Math.max(minimum, Math.floor(number)) : fallback;
+  return Number.isFinite(number) ? Math.max(minimum, Math.min(maximum, Math.floor(number))) : fallback;
 }
 
 export class GeometryFactory {

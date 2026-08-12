@@ -235,8 +235,9 @@ async function main() {
   window.addEventListener('pagehide', disposeAll, { once: true });
 
   // ===== 就绪 =====
-  loadingOverlay.classList.add('hidden');
-  document.getElementById('viewportHint').textContent =
+  loadingOverlay?.classList.add('hidden');
+  const viewportHint = document.getElementById('viewportHint');
+  if (viewportHint) viewportHint.textContent =
     '左键选中 \u00b7 拖拽旋转 \u00b7 右键平移 \u00b7 滚轮缩放';
 }
 
