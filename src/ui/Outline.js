@@ -14,7 +14,8 @@ export class Outline {
   init() {
     this._offAdded = this.sceneManager.on('objectadded', () => this.render());
     this._offRemoved = this.sceneManager.on('objectremoved', () => this.render());
-    this._offName = this.sceneManager.on('namechanged', () => this.render());
+    // 重命名只更新对应名称节点，避免单对象改名触发整表全量重建（O(1) DOM 更新）
+    this._offName = this.sceneManager.on('namechanged', ({ id, name }) => this._updateName(id, name));
     // 选择切换只更新 active class，不重建整个列表
     this._offSelection = this.sceneManager.on('selectionchange', () => this._updateSelection());
     // 事件委托：容器上只绑一次点击监听，避免每次 render 全量重建后重新 querySelectorAll + 逐个绑定
@@ -58,11 +59,23 @@ export class Outline {
     });
   }
 
+  /** 轻量重命名更新 — 只改写对应名称节点，避免整表重建 */
+  _updateName(id, name) {
+    const list = document.getElementById('outlineList');
+    if (!list || !id) return;
+    const item = list.querySelector(`.outline-item[data-id="${CSS.escape(id)}"]`);
+    if (!item) return;
+    const nameEl = item.querySelector('.name');
+    // textContent 天然防注入，无需 escapeHtml
+    if (nameEl) nameEl.textContent = String(name ?? '');
+  }
+
   render() {
     const list = document.getElementById('outlineList');
     const count = document.getElementById('outlineCount');
+    if (!list) return;
     const objects = this.sceneManager.getAllObjects();
-    count.textContent = objects.length;
+    if (count) count.textContent = objects.length;
 
     if (objects.length === 0) {
       list.innerHTML = '<div class="empty-hint">场景为空<br>从工具栏创建第一个物体</div>';

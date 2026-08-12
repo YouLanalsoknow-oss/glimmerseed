@@ -26,6 +26,7 @@ export class BookmarkBar {
     this._inspectorUserClosed = false;
     this.canvasRuntime = new CanvasRuntime(persistence.resources);
     this.savedData = savedData;
+    this._disposed = false; // 异步导入（模型/PSD）进行中可被 dispose 的存活标志
   }
 
   async init() {
@@ -411,11 +412,14 @@ export class BookmarkBar {
         object.position.y = 0;
         object.traverse(child => { if (child.isMesh) { child.castShadow = true; child.receiveShadow = true; } });
         if (lowPoly) await this._makeLowPoly(object);
+        // 空值安全：模型加载/低面化期间组件可能被 dispose，释放已加载对象并中止导入
+        if (this._disposed) { object.traverse(n => this._disposeNodeSafe(n)); return; }
         const sourceResources = [];
         for (const item of files) {
           const resource = await this.persistence.resources?.put(item, { name: item.name, type: item.type || 'application/octet-stream' });
           if (resource) sourceResources.push({ id: resource.id, name: item.name, type: item.type || '' });
         }
+        if (this._disposed) { object.traverse(n => this._disposeNodeSafe(n)); return; }
         const source = sourceResources.find(item => item.name === file.name);
         const data = { name: file.name.replace(/\.[^.]+$/, ''), sourceResourceId: source?.id || '', sourceName: file.name, sourceType: file.type || '', sourceResources };
         const id = this.sceneManager.addExternalObject(object, data);
@@ -430,7 +434,7 @@ export class BookmarkBar {
         this.canvasRuntime.notify(`${lowPoly ? '已导入低面模型' : '已导入模型'}：${file.name}`);
       } catch (error) {
         console.error('[BookmarkBar] model import failed:', error);
-        this.canvasRuntime.notify(`模型导入失败：${error.message}`);
+        this.canvasRuntime.notify(`模型导入失败：${error?.message || String(error)}`);
       } finally {
         if (objectUrl) URL.revokeObjectURL(objectUrl);
         dependencyUrls.forEach(url => URL.revokeObjectURL(url));
@@ -478,6 +482,15 @@ export class BookmarkBar {
   }
 
   // ===== 便签纸管理 =====
+
+  /** 安全释放单个节点下的几何体/材质（用于导入中途 dispose 时清理未挂载对象） */
+  _disposeNodeSafe(node) {
+    try {
+      node.geometry?.dispose();
+      const mats = Array.isArray(node.material) ? node.material : [node.material];
+      mats.forEach(m => typeof m?.dispose === 'function' && m.dispose());
+    } catch (_) { /* 释放失败不阻断导入中止流程 */ }
+  }
 
   _showNote(name) {
     const note = document.getElementById(name + 'Note');
@@ -542,6 +555,7 @@ export class BookmarkBar {
   }
 
   dispose() {
+    this._disposed = true;
     this._offSystemState?.(); this._offSystemState = null;
     this._offSystemAction?.(); this._offSystemAction = null;
     this._offHistory?.(); this._offHistory = null;

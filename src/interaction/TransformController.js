@@ -33,7 +33,7 @@ export class TransformController {
     const helper = this.controls.getHelper ? this.controls.getHelper() : this.controls;
     viewport.scene.add(helper);
 
-    // Disable orbit controls during gizmo drag
+    // 禁用 orbit 控件在 gizmo 拖拽期间
     this._dragListener = (event) => {
       this._isDragging = event.value;
       viewport.controls.enabled = !event.value;
@@ -43,6 +43,9 @@ export class TransformController {
         this._transformBefore = object ? clone(object.data) : null;
         // 捕获本次拖拽的目标对象 id：dragend 时若选中对象已切换，丢弃 before 防止 A 的旧数据写回 B
         this._dragTargetId = mesh.userData.sceneObjectId;
+      } else if (event.value) {
+        // 拖拽起点未命中有效对象（如选中集为空）：清空残留 targetId，避免后续误用旧 id
+        this._dragTargetId = null;
       } else if (!event.value && this._transformBefore && mesh?.userData?.sceneObjectId) {
         if (mesh.userData.sceneObjectId === this._dragTargetId) {
           const object = this.sceneManager.getObject(mesh.userData.sceneObjectId);
@@ -51,6 +54,8 @@ export class TransformController {
             this.sceneManager.pushCommand(new UpdateObjectCommand(this.sceneManager, mesh.userData.sceneObjectId, this._transformBefore, after));
           }
         }
+        // 拖拽结束：包围盒重算一次，覆盖拖拽中跳过的 setFromObject，保证选中框落在最终位置
+        if (this._box) this._box.setFromObject(mesh);
         this._transformBefore = null;
         this._dragTargetId = null;
       }
@@ -64,7 +69,9 @@ export class TransformController {
       const id = mesh.userData?.sceneObjectId;
       if (id) {
         this.sceneManager.syncTransformFromMesh(id);
-        if (this._box) this._box.setFromObject(mesh);
+        // 性能：拖拽中 objectChange 每帧触发，跳过 BoxHelper.setFromObject 的全量遍历（大网格成本高）；
+        // 包围盒在 dragend 由 _dragListener 重算一次，避免每帧重复计算。
+        if (this._box && !this._isDragging) this._box.setFromObject(mesh);
       }
     };
     this.controls.addEventListener('objectChange', this._objectChangeListener);

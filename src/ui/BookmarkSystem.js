@@ -83,11 +83,6 @@ export class BookmarkSystem {
     }
   }
 
-  resetConcepts() {
-    this.activeParent = null;
-    this.emit('statechange');
-  }
-
   getRenderState() {
     const concepts = this.mode === 'canvas' ? this.canvasTools : this.concepts;
     const parent = concepts.find(c => c.id === this.activeParent);

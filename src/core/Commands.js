@@ -79,7 +79,8 @@ export class AddObjectCommand {
   }
 
   undo() {
-    this.sceneManager.removeObject(this.data.id);
+    // 空值安全：redo/undo 均先判 data，避免构造期 data 缺失时解引用崩裸
+    if (this.data) this.sceneManager.removeObject(this.data.id);
   }
 }
 

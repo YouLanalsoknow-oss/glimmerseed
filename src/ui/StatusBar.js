@@ -17,19 +17,24 @@ export class StatusBar {
   init() {
     this._offScene = this.sceneManager.on('scenechanged', () => this._scheduleUpdate());
     this._offSelection = this.sceneManager.on('selectionchange', () => this._scheduleUpdate());
+    // 缓存 DOM 引用，update() 复用，避免每次 rAF 合并更新时重复 getElementById
+    this._objCountEl = document.getElementById('statusObjects');
+    this._selEl = document.getElementById('statusSelection');
+    this._backendEl = document.getElementById('statusBackend');
     this.update();
   }
 
   dispose() {
     this._offScene?.(); this._offScene = null;
     this._offSelection?.(); this._offSelection = null;
+    this._objCountEl = null; this._selEl = null; this._backendEl = null;
     this._scheduleUpdate.cancel?.();
   }
 
   update() {
-    const objCount = document.getElementById('statusObjects');
-    const selEl = document.getElementById('statusSelection');
-    const backendEl = document.getElementById('statusBackend');
+    const objCount = this._objCountEl;
+    const selEl = this._selEl;
+    const backendEl = this._backendEl;
 
     if (objCount) objCount.textContent = `物体: ${this.sceneManager.count}`;
 
@@ -38,7 +43,8 @@ export class StatusBar {
       if (selected.length === 0) {
         selEl.textContent = '未选中';
       } else if (selected.length === 1) {
-        selEl.textContent = `已选: ${selected[0].data.name}`;
+        // 空值安全：data 缺失时回退空串，避免解引用崩裸
+        selEl.textContent = `已选: ${selected[0].data?.name ?? ''}`;
       } else {
         selEl.textContent = `已选 ${selected.length} 个对象`;
       }
