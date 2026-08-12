@@ -63,27 +63,27 @@ export class Inspector {
       <div class="field-group">
         <div class="field-group-title">位置</div>
         <div class="field-row">
-          <div class="field"><label>X</label><input type="number" step="0.1" data-t="position" data-axis="0" value="${fmt(t.position?.[0] ?? 0)}"></div>
-          <div class="field"><label>Y</label><input type="number" step="0.1" data-t="position" data-axis="1" value="${fmt(t.position?.[1] ?? 0)}"></div>
-          <div class="field"><label>Z</label><input type="number" step="0.1" data-t="position" data-axis="2" value="${fmt(t.position?.[2] ?? 0)}"></div>
+          <div class="field"><label>X</label><input type="number" step="0.1" data-t="position" data-axis="0" value="${fmt(t?.position?.[0] ?? 0)}"></div>
+          <div class="field"><label>Y</label><input type="number" step="0.1" data-t="position" data-axis="1" value="${fmt(t?.position?.[1] ?? 0)}"></div>
+          <div class="field"><label>Z</label><input type="number" step="0.1" data-t="position" data-axis="2" value="${fmt(t?.position?.[2] ?? 0)}"></div>
         </div>
       </div>
 
       <div class="field-group">
         <div class="field-group-title">旋转 (度)</div>
         <div class="field-row">
-          <div class="field"><label>X</label><input type="number" step="1" data-t="rotation" data-axis="0" value="${fmt((t.rotation?.[0] ?? 0) * RAD2DEG)}"></div>
-          <div class="field"><label>Y</label><input type="number" step="1" data-t="rotation" data-axis="1" value="${fmt((t.rotation?.[1] ?? 0) * RAD2DEG)}"></div>
-          <div class="field"><label>Z</label><input type="number" step="1" data-t="rotation" data-axis="2" value="${fmt((t.rotation?.[2] ?? 0) * RAD2DEG)}"></div>
+          <div class="field"><label>X</label><input type="number" step="1" data-t="rotation" data-axis="0" value="${fmt((t?.rotation?.[0] ?? 0) * RAD2DEG)}"></div>
+          <div class="field"><label>Y</label><input type="number" step="1" data-t="rotation" data-axis="1" value="${fmt((t?.rotation?.[1] ?? 0) * RAD2DEG)}"></div>
+          <div class="field"><label>Z</label><input type="number" step="1" data-t="rotation" data-axis="2" value="${fmt((t?.rotation?.[2] ?? 0) * RAD2DEG)}"></div>
         </div>
       </div>
 
       <div class="field-group">
         <div class="field-group-title">缩放</div>
         <div class="field-row">
-          <div class="field"><label>X</label><input type="number" step="0.1" data-t="scale" data-axis="0" value="${fmt(t.scale?.[0] ?? 0)}"></div>
-          <div class="field"><label>Y</label><input type="number" step="0.1" data-t="scale" data-axis="1" value="${fmt(t.scale?.[1] ?? 0)}"></div>
-          <div class="field"><label>Z</label><input type="number" step="0.1" data-t="scale" data-axis="2" value="${fmt(t.scale?.[2] ?? 0)}"></div>
+          <div class="field"><label>X</label><input type="number" step="0.1" data-t="scale" data-axis="0" value="${fmt(t?.scale?.[0] ?? 0)}"></div>
+          <div class="field"><label>Y</label><input type="number" step="0.1" data-t="scale" data-axis="1" value="${fmt(t?.scale?.[1] ?? 0)}"></div>
+          <div class="field"><label>Z</label><input type="number" step="0.1" data-t="scale" data-axis="2" value="${fmt(t?.scale?.[2] ?? 0)}"></div>
         </div>
       </div>
 
@@ -233,7 +233,7 @@ export class Inspector {
         if (document.activeElement === input) return;
         const type = input.dataset.t;
         const axis = parseInt(input.dataset.axis);
-        let val = t[type]?.[axis] ?? 0;
+        let val = t?.[type]?.[axis] ?? 0;
         if (type === 'rotation') {
           // 显示时归一化到 [-180, 180] 度
           val = (((val * RAD2DEG) % 360) + 540) % 360 - 180;

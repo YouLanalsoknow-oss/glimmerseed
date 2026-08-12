@@ -24,7 +24,14 @@ export function isValidTopology(topology) {
  * @returns {Array<{start:number,count:number,materialIndex:number}>} 实际写入的 group 列表
  */
 export function writeTopologyToGeometry(geometry, topology) {
-  geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(topology.vertices.flat()), 3));
+  // 预分配 Float32Array 后按索引逐顶点写入，省去 flat() 先生成普通数组再拷贝的双重分配
+  const vertices = topology.vertices;
+  const positions = new Float32Array(vertices.length * 3);
+  for (let i = 0; i < vertices.length; i++) {
+    const v = vertices[i];
+    positions[i * 3] = v[0]; positions[i * 3 + 1] = v[1]; positions[i * 3 + 2] = v[2];
+  }
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geometry.setIndex(topology.indices);
   geometry.computeVertexNormals();
   geometry.computeBoundingBox();

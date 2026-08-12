@@ -3,7 +3,7 @@
  * 每个命令存储完整数据快照，通过工厂重建网格
  */
 import { clone, sanitizeColor } from '../shared/utils.js';
-import { writeTopologyToGeometry } from '../shared/topology.js';
+import { isValidTopology, writeTopologyToGeometry } from '../shared/topology.js';
 import { isTextureUsedByAnyOther } from '../shared/textureUtils.js';
 
 function disposeObjectResources(object, isTextureShared = null) {
@@ -22,10 +22,19 @@ function disposeObjectResources(object, isTextureShared = null) {
   textures.forEach(texture => texture.dispose());
 }
 
+/** 外部对象命令的共享 dispose：先展开一次场景对象集复用，再统一释放资源 */
+function disposeExternalObject(command) {
+  if (!command.object || command._disposed) return;
+  const others = command.sceneManager?.objects?.values?.() || [];
+  disposeObjectResources(command.object, texture => isTextureUsedByAnyOther(others, texture));
+  command.object = null;
+  command._disposed = true;
+}
+
 /** 将已保存的拓扑数据写入网格几何体（编辑后的顶点/索引可能与工厂默认值不同） */
 function applyTopology(mesh, data) {
   const topology = data.geometry?.topology;
-  if (!topology?.vertices || !topology?.indices) return;
+  if (!isValidTopology(topology)) return;
   writeTopologyToGeometry(mesh.geometry, topology);
 }
 
@@ -95,10 +104,7 @@ export class RemoveObjectCommand {
   }
 
   dispose() {
-    if (!this.object || this._disposed) return;
-    disposeObjectResources(this.object, texture => isTextureUsedByAnyOther(this.sceneManager?.objects?.values?.() || [], texture));
-    this.object = null;
-    this._disposed = true;
+    disposeExternalObject(this);
   }
 }
 
@@ -145,9 +151,6 @@ export class AddExternalObjectCommand {
   }
 
   dispose() {
-    if (!this.object || this._disposed) return;
-    disposeObjectResources(this.object, texture => isTextureUsedByAnyOther(this.sceneManager?.objects?.values?.() || [], texture));
-    this.object = null;
-    this._disposed = true;
+    disposeExternalObject(this);
   }
 }

@@ -122,7 +122,7 @@ export class Persistence {
 
   async _doSave(sceneManager, viewport, canvasRuntime) {
     const data = sceneManager.getSceneData();
-    if (viewport) data.camera = viewport.getCameraData();
+    if (viewport) { const cam = viewport.getCameraData(); if (cam) data.camera = cam; }
     if (canvasRuntime) data.canvas = canvasRuntime.serialize();
     if (!this._isValidSceneData(data)) throw new Error('场景数据校验失败');
 
@@ -223,6 +223,7 @@ export class Persistence {
     if (!data || typeof data !== 'object' || !Array.isArray(data.objects) || data.objects.length > 2000) return false;
     return data.objects.every(object => {
       if (!object || typeof object !== 'object' || typeof object.id !== 'string' || typeof object.type !== 'string') return false;
+      if (object.name != null && (typeof object.name !== 'string' || object.name.length >= 500)) return false;
       const t = object.transform;
       if (t && (!this._isNumberArray(t.position, 3) || !this._isNumberArray(t.rotation, 3) || !this._isNumberArray(t.scale, 3))) return false;
       const topology = object.geometry?.topology;
@@ -251,7 +252,7 @@ export class Persistence {
     return canvas && Number.isInteger(canvas.version) && Array.isArray(canvas.elements) &&
       canvas.elements.length <= 2000 && canvas.elements.every(item => item && typeof item === 'object' &&
       typeof item.tag === 'string' && typeof item.className === 'string' && item.className.length < 2000 && typeof item.style === 'string' && item.style.length < 10000 &&
-        (item.text == null || typeof item.text === 'string') && (item.html == null || typeof item.html === 'string') &&
+        (item.text == null || typeof item.text === 'string') && (item.html == null || typeof item.html === 'string' && item.html.length < 100000) &&
         (item.src == null || typeof item.src === 'string' && item.src.length < 2000) &&
         (item.alt == null || typeof item.alt === 'string' && item.alt.length < 2000) &&
         (item.resourceId == null || typeof item.resourceId === 'string' && item.resourceId.length < 200));
@@ -310,7 +311,7 @@ export class Persistence {
     if (this._disposed) return false;
     try {
       const data = sceneManager.getSceneData();
-      if (viewport) data.camera = viewport.getCameraData();
+      if (viewport) { const cam = viewport.getCameraData(); if (cam) data.camera = cam; }
       if (canvasRuntime) data.canvas = canvasRuntime.serialize();
       if (!this._isValidSceneData(data)) throw new Error('场景数据校验失败');
       return this._setItemWithQuotaFallback(STORAGE_KEY, JSON.stringify(data));

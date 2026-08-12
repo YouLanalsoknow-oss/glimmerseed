@@ -51,6 +51,7 @@ export class SelectionController {
 
     const dom = this.renderer.domElement;
     const rect = dom.getBoundingClientRect();
+    if (!rect.width || !rect.height) return; // 视口隐藏/尺寸为 0 时跳过，避免 NDC 除零产生 Infinity/NaN
     this.pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
     this.pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 

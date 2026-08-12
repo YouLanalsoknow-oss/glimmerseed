@@ -50,7 +50,9 @@ const SAFE_DATA_IMAGE = /^data:image\/(png|jpeg|jpg|gif|webp);/;
 /** 校验 URL 是否安全：拒绝 javascript:/vbscript: 与危险 data: 载荷（供 src/href 复用） */
 export function isSafeUrl(value) {
   if (typeof value !== 'string') return false;
-  const v = value.trim().toLowerCase();
+  // 先剥离控制字符/空白：浏览器在解析 URL 前会剥离 \u0000-\u001F，若不清除，
+  // "java\nscript:alert(1)" 经 innerHTML 解码后可能绕过 startsWith 判定被当作 javascript: 执行
+  const v = value.replace(/[\u0000-\u001F\u007F]/g, '').trim().toLowerCase();
   if (v.startsWith('javascript:') || v.startsWith('vbscript:')) return false;
   // data: 仅放行白名单光栅位图，拒绝 data:image/svg+xml、data:text/*、data:application/* 等可载荷
   if (v.startsWith('data:')) return SAFE_DATA_IMAGE.test(v);
@@ -59,7 +61,8 @@ export function isSafeUrl(value) {
 
 function _isSafeStyle(value) {
   if (typeof value !== 'string') return false;
-  const v = value.toLowerCase();
+  // CSS 解析器同样会剥离控制字符，清掉后再匹配，防 "url(\njavascript:...)" 之类绕过
+  const v = value.replace(/[\u0000-\u001F\u007F]/g, '').toLowerCase();
   return !(v.includes('javascript:') || v.includes('expression(') || v.includes('url('));
 }
 

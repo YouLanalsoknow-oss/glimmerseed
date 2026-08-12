@@ -9,10 +9,12 @@ export class Renderer {
     this.backend = 'initializing';
     this.canvas = null;
     this._initPromise = null;
+    this._disposed = false;
   }
 
   async init(canvas) {
     if (!canvas) throw new Error('Renderer.init: canvas is required');
+    if (this._disposed) return null;
     if (this.renderer) return this;
     if (this._initPromise) {
       if (this.canvas !== canvas) throw new Error('Renderer.init: already initializing another canvas');
@@ -37,6 +39,8 @@ export class Renderer {
       try {
         gpu = new THREE.WebGPURenderer({ canvas, antialias: true });
         await gpu.init();
+        // dispose 可能在 await 期间被调用：此时释放已创建的实例，不再挂回已报废的渲染器
+        if (this._disposed) { gpu.dispose?.(); return null; }
         gpu.setPixelRatio(pixelRatio);
         this.renderer = gpu;
         this.backend = 'WebGPU';
@@ -54,6 +58,7 @@ export class Renderer {
     try {
       const webgl = new THREE.WebGLRenderer({ canvas, antialias: true });
       if (!webgl.getContext()) throw new Error('WebGL2 context unavailable');
+      if (this._disposed) { webgl.dispose(); return null; }
       webgl.setPixelRatio(pixelRatio);
       this.renderer = webgl;
       this.backend = 'WebGL2';
@@ -101,6 +106,7 @@ export class Renderer {
   }
 
   dispose() {
+    this._disposed = true;
     this.renderer?.dispose();
     this.renderer = null;
     this.canvas = null;

@@ -45,7 +45,7 @@ export class StatusBar {
     }
 
     if (backendEl) {
-      backendEl.textContent = `渲染后端: ${this.renderer.backend}`;
+      backendEl.textContent = `渲染后端: ${this.renderer?.backend ?? 'unknown'}`;
     }
   }
 }

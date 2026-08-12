@@ -80,6 +80,7 @@ export class Viewport {
   }
 
   getCameraData() {
+    if (!this.camera || !this.controls) return null;
     return {
       position: [this.camera.position.x, this.camera.position.y, this.camera.position.z],
       target: [this.controls.target.x, this.controls.target.y, this.controls.target.z],
