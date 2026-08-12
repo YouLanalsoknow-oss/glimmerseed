@@ -1,8 +1,25 @@
+import * as THREE from 'three';
+
 /** structuredClone 优先，缺失时回退 JSON 序列化（比 JSON 快约 2-3 倍且支持更多类型） */
 export function clone(value) {
   return typeof structuredClone === 'function'
     ? structuredClone(value)
     : JSON.parse(JSON.stringify(value));
+}
+
+let _tmpColor = null; // 复用 Color 实例做字符串校验，避免逐次分配
+/** 常见 hex 字符串直接放行，避免逐一 new THREE.Color 构造校验的开销 */
+const _SIMPLE_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+/** 材质色值校验：非法/缺失值回退默认色，避免 color.set() 抛错。供导出/恢复/命令等所有写材质色路径复用。 */
+export function sanitizeColor(value, fallback = '#cccccc') {
+  if (typeof value === 'number' && isFinite(value) && value >= 0) return value;
+  if (typeof value === 'string' && value !== '') {
+    if (_SIMPLE_HEX.test(value)) return value;
+    if (!_tmpColor) _tmpColor = new THREE.Color();
+    try { _tmpColor.set(value); return value; } catch (_) { return fallback; }
+  }
+  if (value && value.isColor) return value;
+  return fallback;
 }
 
 /** 从 URL/路径中解析文件名（资源依赖名），解码失败时回退原始名称 */

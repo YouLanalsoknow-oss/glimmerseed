@@ -219,7 +219,8 @@ export class Persistence {
   }
 
   _isValidSceneData(data) {
-    if (!data || typeof data !== 'object' || !Array.isArray(data.objects)) return false;
+    // 场景规模上限：对象数封顶，避免病态存档拖垮校验/保存
+    if (!data || typeof data !== 'object' || !Array.isArray(data.objects) || data.objects.length > 2000) return false;
     return data.objects.every(object => {
       if (!object || typeof object !== 'object' || typeof object.id !== 'string' || typeof object.type !== 'string') return false;
       const t = object.transform;

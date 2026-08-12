@@ -336,11 +336,22 @@ export class CanvasRuntime {
     element.focus();
     const before = element.innerHTML;
     let observer = null;
+    // 编辑期拦截粘贴：剪贴板 HTML 先净化再插入，避免 <img onerror=...> 等在 blur 前当场执行
+    const onPaste = (e) => {
+      e.preventDefault();
+      const html = e.clipboardData?.getData?.('text/html');
+      const text = e.clipboardData?.getData?.('text/plain');
+      const safe = html ? sanitizeCanvasHtml(html) : '';
+      if (safe) document.execCommand('insertHTML', false, safe);
+      else if (text) document.execCommand('insertText', false, text);
+    };
+    element.addEventListener('paste', onPaste);
     const finish = () => {
       element.contentEditable = 'false';
       element.removeEventListener('blur', finish);
+      element.removeEventListener('paste', onPaste);
       if (observer) { observer.disconnect(); observer = null; }
-      // 完成编辑时净化 innerHTML，防止可编辑区被注入恶意标签/事件
+      // 完成编辑时净化 innerHTML，兜底防止可编辑区被注入恶意标签/事件
       const sanitized = sanitizeCanvasHtml(element.innerHTML);
       if (before !== sanitized) {
         this._record('text', { element, from: before, to: sanitized });

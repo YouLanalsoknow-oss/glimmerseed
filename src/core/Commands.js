@@ -2,7 +2,7 @@
  * 命令模式 — 撤销/重做命令对象
  * 每个命令存储完整数据快照，通过工厂重建网格
  */
-import { clone } from '../shared/utils.js';
+import { clone, sanitizeColor } from '../shared/utils.js';
 import { writeTopologyToGeometry } from '../shared/topology.js';
 import { isTextureUsedByAnyOther } from '../shared/textureUtils.js';
 
@@ -40,7 +40,7 @@ function applyState(mesh, data) {
   if (mat && mesh.material) {
     const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     materials.forEach(material => {
-      material.color?.set(mat.color || '#cccccc');
+      material.color?.set(sanitizeColor(mat.color));
       if ('metalness' in material) material.metalness = mat.metalness ?? 0.1;
       if ('roughness' in material) material.roughness = mat.roughness ?? 0.7;
     });

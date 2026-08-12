@@ -8,6 +8,11 @@ import { schedule } from '../shared/throttleByRAF.js';
 const RAD2DEG = 180 / Math.PI;
 const DEG2RAD = Math.PI / 180;
 const fmt = (v) => (v ?? 0).toFixed(2);
+// 滑块值安全化：转数值并夹取到 [0,1]，非法值回退默认，避免存档中的畸形 metalness/roughness 注入模板
+const sliderVal = (v, dft = 0.5) => {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : dft;
+};
 
 /**
  * 界面层 — 属性面板：名称、变换、材质编辑
@@ -90,11 +95,11 @@ export class Inspector {
         </div>
         <div class="field" style="grid-template-columns:56px 1fr;margin-bottom:8px">
           <label style="text-align:left;padding-left:2px">金属度</label>
-          <input type="range" min="0" max="1" step="0.05" id="insp-metalness" value="${m.metalness ?? 0.1}" style="padding:0;border:0;background:none">
+          <input type="range" min="0" max="1" step="0.05" id="insp-metalness" value="${sliderVal(m.metalness, 0.1)}" style="padding:0;border:0;background:none">
         </div>
         <div class="field" style="grid-template-columns:56px 1fr">
           <label style="text-align:left;padding-left:2px">粗糙度</label>
-          <input type="range" min="0" max="1" step="0.05" id="insp-roughness" value="${m.roughness ?? 0.7}" style="padding:0;border:0;background:none">
+          <input type="range" min="0" max="1" step="0.05" id="insp-roughness" value="${sliderVal(m.roughness, 0.7)}" style="padding:0;border:0;background:none">
         </div>
       </div>
     `;
@@ -244,8 +249,8 @@ export class Inspector {
 
     if (this._colorEl) this._colorEl.value = m.color ?? DEFAULT_MATERIAL.color;
     if (this._colorText && document.activeElement !== this._colorText) this._colorText.value = m.color ?? DEFAULT_MATERIAL.color;
-    if (this._metalEl && document.activeElement !== this._metalEl) this._metalEl.value = m.metalness ?? 0.1;
-    if (this._roughEl && document.activeElement !== this._roughEl) this._roughEl.value = m.roughness ?? 0.7;
+    if (this._metalEl && document.activeElement !== this._metalEl) this._metalEl.value = sliderVal(m.metalness, 0.1);
+    if (this._roughEl && document.activeElement !== this._roughEl) this._roughEl.value = sliderVal(m.roughness, 0.7);
   }
 
   /** 仅接受 #rrggbb，杜绝外部数据注入非法属性值 */

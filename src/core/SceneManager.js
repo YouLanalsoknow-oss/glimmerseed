@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { DEFAULT_MATERIAL, TYPE_NAMES, TYPE_ICONS } from '../shared/constants.js';
-import { clone, dependencyName } from '../shared/utils.js';
+import { clone, dependencyName, sanitizeColor } from '../shared/utils.js';
 import { isValidTopology, writeTopologyToGeometry, buildTopologyGeometry } from '../shared/topology.js';
 import { isTextureUsedByAnyOther } from '../shared/textureUtils.js';
 import { createEmitter } from '../shared/events.js';
@@ -15,24 +15,6 @@ function genId() { return `obj-${Date.now().toString(36)}-${++_idCounter}`; }
 
 // TextureLoader 无状态，模块级复用，避免每次加载都新建实例
 const _textureLoader = new THREE.TextureLoader();
-
-/**
- * 材质色值校验：非法/缺失值回退默认色，避免 color.set() 抛错。
- * 接受 number(0~0xffffff)、合法 CSS 颜色字符串、THREE.Color 实例；
- * 其余（null、空串、畸形字符串、NaN 等）一律回退 fallback。
- */
-const _SIMPLE_HEX = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
-
-function _sanitizeColor(value, fallback = '#cccccc') {
-  if (typeof value === 'number' && isFinite(value) && value >= 0) return value;
-  if (typeof value === 'string' && value !== '') {
-    // 常见 hex 字符串直接放行，避免逐一 new THREE.Color 构造校验的开销
-    if (_SIMPLE_HEX.test(value)) return value;
-    try { new THREE.Color(value); return value; } catch (_) { return fallback; }
-  }
-  if (value && value.isColor) return value;
-  return fallback;
-}
 
 export class SceneManager {
   constructor(scene, geometryFactory = null, resourceStore = null) {
@@ -249,7 +231,7 @@ export class SceneManager {
     const mat = obj.data.material;
     if (mat) obj.mesh.traverse?.(node => {
       const materials = Array.isArray(node.material) ? node.material : [node.material];
-      materials.forEach(material => { if (material?.color) material.color.set(_sanitizeColor(mat.color)); if (material && 'metalness' in material) material.metalness = mat.metalness ?? 0.1; if (material && 'roughness' in material) material.roughness = mat.roughness ?? 0.7; });
+      materials.forEach(material => { if (material?.color) material.color.set(sanitizeColor(mat.color)); if (material && 'metalness' in material) material.metalness = mat.metalness ?? 0.1; if (material && 'roughness' in material) material.roughness = mat.roughness ?? 0.7; });
     });
   }
 
@@ -282,7 +264,7 @@ export class SceneManager {
       if (!node.material) return;
       const materials = Array.isArray(node.material) ? node.material : [node.material];
       materials.forEach(mat => {
-        if (material.color && mat.color) mat.color.set(material.color);
+        if (material.color && mat.color) mat.color.set(sanitizeColor(material.color));
         if (material.metalness != null && 'metalness' in mat) mat.metalness = material.metalness;
         if (material.roughness != null && 'roughness' in mat) mat.roughness = material.roughness;
       });
@@ -349,8 +331,8 @@ export class SceneManager {
     if (!geo) return null;
     const materialData = Array.isArray(record.material) ? record.material : [record.material || {}];
     const materials = materialData.map(item => new THREE.MeshStandardMaterial({
-      color: _sanitizeColor(item?.color), metalness: item?.metalness ?? 0.1, roughness: item?.roughness ?? 0.7,
-      emissive: _sanitizeColor(item?.emissive, '#000000'), emissiveIntensity: item?.emissiveIntensity ?? 1,
+      color: sanitizeColor(item?.color), metalness: item?.metalness ?? 0.1, roughness: item?.roughness ?? 0.7,
+      emissive: sanitizeColor(item?.emissive, '#000000'), emissiveIntensity: item?.emissiveIntensity ?? 1,
       opacity: item?.opacity ?? 1, transparent: Boolean(item?.transparent), depthWrite: item?.depthWrite ?? true,
       side: Number.isInteger(item?.side) ? item.side : THREE.FrontSide, wireframe: Boolean(item?.wireframe),
     }));
@@ -515,8 +497,8 @@ export class SceneManager {
             if (!material) return; // 空值安全：恢复的 mesh 可能带 undefined 材质槽
             // M2: 用 index 替代 indexOf（O(n²)→O(n)），用 ?? 替代 || 避免 falsy 值错误回退
             const value = Array.isArray(mat) ? (mat[index] ?? mat[0]) : mat;
-            material.color?.set(value?.color || '#cccccc');
-            material.emissive?.set(value?.emissive || '#000000');
+            material.color?.set(sanitizeColor(value?.color));
+            material.emissive?.set(sanitizeColor(value?.emissive, '#000000'));
             if ('emissiveIntensity' in material) material.emissiveIntensity = value?.emissiveIntensity ?? 1;
             if ('metalness' in material) material.metalness = value?.metalness ?? 0.1;
             if ('roughness' in material) material.roughness = value?.roughness ?? 0.7;
