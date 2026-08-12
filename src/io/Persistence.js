@@ -8,6 +8,10 @@ import { isValidTopology } from '../shared/topology.js';
 const STORAGE_KEY = 'glimmerbook-workbench-v1';
 const SAVE_DEBOUNCE = 800; // ms
 
+// 浏览器私有 QuotaExceededError code：22 = Firefox/Safari，1014 = Chrome（更稳的判断是 err.name === 'QuotaExceededError'）
+const QUOTA_CODE_LEGACY_FIREFOX = 22;
+const QUOTA_CODE_CHROME = 1014;
+
 // 存档版本号：数据无 version 字段时视为旧版（兼容）；低于最小支持版本时仅提示并尽量兼容，不静默丢弃。
 const SCENE_VERSION = 1;
 const MIN_SUPPORTED_VERSION = 1;
@@ -52,7 +56,7 @@ export class Persistence {
       localStorage.setItem(key, value);
       return true;
     } catch (err) {
-      const isQuota = err && (err.name === 'QuotaExceededError' || err.code === 22 || err.code === 1014);
+      const isQuota = err && (err.name === 'QuotaExceededError' || err.code === QUOTA_CODE_LEGACY_FIREFOX || err.code === QUOTA_CODE_CHROME);
       if (isQuota && key === STORAGE_KEY) {
         try {
           const old = localStorage.getItem(key);

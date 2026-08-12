@@ -59,33 +59,9 @@ export class Inspector {
 
     body.innerHTML = `
       <input class="name-field" id="insp-name" type="text" value="${escapeHtml(d.name)}" placeholder="名称">
-
-      <div class="field-group">
-        <div class="field-group-title">位置</div>
-        <div class="field-row">
-          <div class="field"><label>X</label><input type="number" step="0.1" data-t="position" data-axis="0" value="${fmt(t?.position?.[0] ?? 0)}"></div>
-          <div class="field"><label>Y</label><input type="number" step="0.1" data-t="position" data-axis="1" value="${fmt(t?.position?.[1] ?? 0)}"></div>
-          <div class="field"><label>Z</label><input type="number" step="0.1" data-t="position" data-axis="2" value="${fmt(t?.position?.[2] ?? 0)}"></div>
-        </div>
-      </div>
-
-      <div class="field-group">
-        <div class="field-group-title">旋转 (度)</div>
-        <div class="field-row">
-          <div class="field"><label>X</label><input type="number" step="1" data-t="rotation" data-axis="0" value="${fmt((t?.rotation?.[0] ?? 0) * RAD2DEG)}"></div>
-          <div class="field"><label>Y</label><input type="number" step="1" data-t="rotation" data-axis="1" value="${fmt((t?.rotation?.[1] ?? 0) * RAD2DEG)}"></div>
-          <div class="field"><label>Z</label><input type="number" step="1" data-t="rotation" data-axis="2" value="${fmt((t?.rotation?.[2] ?? 0) * RAD2DEG)}"></div>
-        </div>
-      </div>
-
-      <div class="field-group">
-        <div class="field-group-title">缩放</div>
-        <div class="field-row">
-          <div class="field"><label>X</label><input type="number" step="0.1" data-t="scale" data-axis="0" value="${fmt(t?.scale?.[0] ?? 0)}"></div>
-          <div class="field"><label>Y</label><input type="number" step="0.1" data-t="scale" data-axis="1" value="${fmt(t?.scale?.[1] ?? 0)}"></div>
-          <div class="field"><label>Z</label><input type="number" step="0.1" data-t="scale" data-axis="2" value="${fmt(t?.scale?.[2] ?? 0)}"></div>
-        </div>
-      </div>
+      ${this._axisGroup('position', '位置', 0.1, t?.position, 1)}
+      ${this._axisGroup('rotation', '旋转 (度)', 1, t?.rotation, RAD2DEG)}
+      ${this._axisGroup('scale', '缩放', 0.1, t?.scale, 1)}
 
       <div class="field-group">
         <div class="field-group-title">材质</div>
@@ -105,6 +81,18 @@ export class Inspector {
     `;
 
     this._bindEvents();
+  }
+
+  /**
+   * 生成变换轴（X/Y/Z）输入行 HTML。axisVals 可能为空，按 0 兜底；multiplier 用于弧度/度的换算。
+   */
+  _axisGroup(type, title, step, axisVals, multiplier) {
+    const axes = ['X', 'Y', 'Z'];
+    const fields = axes.map((axisLabel, axis) => {
+      const v = fmt((axisVals?.[axis] ?? 0) * multiplier);
+      return `<div class="field"><label>${axisLabel}</label><input type="number" step="${step}" data-t="${type}" data-axis="${axis}" value="${v}"></div>`;
+    }).join('');
+    return `<div class="field-group"><div class="field-group-title">${title}</div><div class="field-row">${fields}</div></div>`;
   }
 
   _bindEvents() {

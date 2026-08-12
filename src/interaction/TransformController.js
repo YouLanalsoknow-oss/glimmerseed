@@ -91,11 +91,11 @@ export class TransformController {
     this._offObjectRemoved = sceneManager.on('objectremoved', () => {
       const attached = this.controls?.object;
       if (!attached) return;
-      let found = false;
-      for (const obj of this.sceneManager.objects.values()) {
-        if (obj.mesh === attached) { found = true; break; }
-      }
-      if (!found) this.detach();
+      // 直接比对 userData.sceneObjectId 是否仍存在于对象表，避免 Object.values 全量扫描。
+      // 注意：removeObject 在 emit('objectremoved') 前已删除 userData.sceneObjectId，
+      // 因此被删对象此处拿到 undefined，会正确触发 detach。
+      const attachedId = attached.userData?.sceneObjectId;
+      if (!attachedId || !sceneManager.objects.has(attachedId)) this.detach();
     });
 
     return this;

@@ -230,10 +230,17 @@ export class SceneManager {
     const t = obj.data.transform;
     this._applyTransform(obj.mesh, t);
     const mat = obj.data.material;
-    if (mat) obj.mesh.traverse?.(node => {
+    if (mat) obj?.mesh?.traverse?.(node => {
       const materials = Array.isArray(node.material) ? node.material : [node.material];
-      materials.forEach(material => { if (material?.color) material.color.set(sanitizeColor(mat.color)); if (material && 'metalness' in material) material.metalness = mat.metalness ?? 0.1; if (material && 'roughness' in material) material.roughness = mat.roughness ?? 0.7; });
+      materials.forEach(material => this._applyMaterialProps(material, mat));
     });
+  }
+
+  /** 将外部材质参数应用到单个材质对象；校验属性存在性，避免向不支持该属性的材质写入 */
+  _applyMaterialProps(material, mat) {
+    if (material?.color && mat.color) material.color.set(sanitizeColor(mat.color));
+    if (material && 'metalness' in material) material.metalness = mat.metalness ?? 0.1;
+    if (material && 'roughness' in material) material.roughness = mat.roughness ?? 0.7;
   }
 
   _syncData(id) {

@@ -171,8 +171,7 @@ export class MeshEditController {
       // 覆盖层未构建时先渲染，避免 `_edges` 为 null 导致首次点击静默跳过拾取
       if (!this._edges) this._renderOverlay();
       if (this._edges) {
-        const radius = this.session.mesh.geometry.boundingSphere?.radius || 1;
-        this.raycaster.params.Line.threshold = Math.max(radius * 0.04, 0.02);
+        this.raycaster.params.Line.threshold = this._lineThreshold();
         const edgeHit = this.raycaster.intersectObject(this._edges, false)[0];
         if (edgeHit?.index != null) {
           const edgeId = Math.floor(edgeHit.index / 2);
@@ -188,7 +187,7 @@ export class MeshEditController {
       // 覆盖层未构建时先渲染，避免 `_vertexPoints` 为 null 导致触发射线拾取崩溃
       if (!this._vertexPoints) this._renderOverlay();
       if (this._vertexPoints) {
-        this.raycaster.params.Points.threshold = Math.max((this.session.mesh.geometry.boundingSphere?.radius || 1) * 0.06, 0.04);
+        this.raycaster.params.Points.threshold = this._pointThreshold();
         const vertexHit = this.raycaster.intersectObject(this._vertexPoints, false)[0];
         if (vertexHit) {
           this.session.select(vertexHit.index, event.shiftKey);
@@ -228,12 +227,11 @@ export class MeshEditController {
     this.raycaster.setFromCamera(this.pointer, this.viewport.camera);
     let hoverIndex = -1;
     if (this.mode === 'vertex' && this._vertexPoints) {
-      this.raycaster.params.Points.threshold = Math.max((this.session.mesh.geometry.boundingSphere?.radius || 1) * 0.06, 0.04);
+      this.raycaster.params.Points.threshold = this._pointThreshold();
       const hit = this.raycaster.intersectObject(this._vertexPoints, false)[0];
       hoverIndex = hit?.index ?? -1;
     } else if (this.mode === 'edge' && this._edges) {
-      const radius = this.session.mesh.geometry.boundingSphere?.radius || 1;
-      this.raycaster.params.Line.threshold = Math.max(radius * 0.04, 0.02);
+      this.raycaster.params.Line.threshold = this._lineThreshold();
       const hit = this.raycaster.intersectObject(this._edges, false)[0];
       hoverIndex = hit?.index != null ? Math.floor(hit.index / 2) : -1;
     } else if (this.mode === 'face') {
@@ -254,6 +252,21 @@ export class MeshEditController {
     const fov = camera.fov ? camera.fov * Math.PI / 180 : Math.PI / 4;
     const screenHeight = this.renderer.domElement.clientHeight || 600;
     return (2 * distance * Math.tan(fov / 2)) / screenHeight;
+  }
+
+  /** 网格包围球半径（全链守卫，缺失时回退 1），作为拾取阈值/点尺寸的基准 */
+  _pickRadius() {
+    return this.session?.mesh?.geometry?.boundingSphere?.radius || 1;
+  }
+
+  /** 顶点拾取阈值 — 随网格尺度自适应，带最小下限 */
+  _pointThreshold() {
+    return Math.max(this._pickRadius() * 0.06, 0.04);
+  }
+
+  /** 边拾取阈值 — 随网格尺度自适应，带最小下限 */
+  _lineThreshold() {
+    return Math.max(this._pickRadius() * 0.04, 0.02);
   }
 
   _updateBoxVisual(event) {
@@ -462,7 +475,7 @@ export class MeshEditController {
     if (!this.session) { this._clearOverlay(); return; }
     const { vertices, edges, faces } = this.session.topology;
     const invalidEdges = new Set(this._diagnostic?.nonManifoldEdges || []);
-    const radius = this.session.mesh.geometry.boundingSphere?.radius || 1;
+    const radius = this._pickRadius();
     // P: 选中集签名 — 未变化时跳过选中高亮层重建，消除每次点击 down/up 的重复 dispose/realloc
     const selectionSig = this._selectionSignature();
     const selectionChanged = rebuildStatic || selectionSig !== this._selectionSig;
@@ -656,7 +669,7 @@ export class MeshEditController {
   _createHoverElement() {
     if (!this.session || this._hoverIndex < 0) return;
     const { vertices, edges, faces } = this.session.topology;
-    const radius = this.session.mesh.geometry.boundingSphere?.radius || 1;
+    const radius = this._pickRadius();
     this._hoverType = this.mode;
 
     if (this.mode === 'vertex' && this._hoverIndex < vertices.length && !this.session.selection.vertices.has(this._hoverIndex)) {
