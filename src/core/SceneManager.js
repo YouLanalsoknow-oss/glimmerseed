@@ -171,9 +171,9 @@ export class SceneManager {
     const obj = this.objects.get(id);
     if (!obj) return;
     const m = obj.mesh;
-    if (transform.position) m.position.set(transform.position[0] ?? 0, transform.position[1] ?? 0, transform.position[2] ?? 0);
-    if (transform.rotation) m.rotation.set(transform.rotation[0] ?? 0, transform.rotation[1] ?? 0, transform.rotation[2] ?? 0);
-    if (transform.scale) m.scale.set(transform.scale[0] ?? 1, transform.scale[1] ?? 1, transform.scale[2] ?? 1);
+    if (Array.isArray(transform.position)) m.position.set(transform.position[0] ?? 0, transform.position[1] ?? 0, transform.position[2] ?? 0);
+    if (Array.isArray(transform.rotation)) m.rotation.set(transform.rotation[0] ?? 0, transform.rotation[1] ?? 0, transform.rotation[2] ?? 0);
+    if (Array.isArray(transform.scale)) m.scale.set(transform.scale[0] ?? 1, transform.scale[1] ?? 1, transform.scale[2] ?? 1);
     this._syncData(id);
     this.emit('objectchanged', { id, data: obj.data });
     this.emit('scenechanged');
@@ -627,7 +627,14 @@ export class SceneManager {
   undo() {
     const cmd = this._undoStack.pop();
     if (!cmd) return false;
-    cmd.undo();
+    try {
+      cmd.undo();
+    } catch (e) {
+      // 命令执行失败：回压栈，避免撤销状态与后续命令错位
+      this._undoStack.push(cmd);
+      console.error('[SceneManager] undo failed:', e);
+      return false;
+    }
     this._redoStack.push(cmd);
     this.emit('historychange', { canUndo: this._undoStack.length > 0, canRedo: true });
     this.emit('scenechanged');
@@ -636,7 +643,13 @@ export class SceneManager {
   redo() {
     const cmd = this._redoStack.pop();
     if (!cmd) return false;
-    cmd.redo();
+    try {
+      cmd.redo();
+    } catch (e) {
+      this._redoStack.push(cmd);
+      console.error('[SceneManager] redo failed:', e);
+      return false;
+    }
     this._undoStack.push(cmd);
     this.emit('historychange', { canUndo: true, canRedo: this._redoStack.length > 0 });
     this.emit('scenechanged');

@@ -406,7 +406,9 @@ export class CanvasRuntime {
         const el = document.createElement('img');
         el.className = 'page-element canvas-image';
         el.alt = file.name;
-        this.resourceStore?.put(file, { name: file.name, type: file.type }).then(resource => {
+        // resourceStore 可为 null（受限环境）：先判空，避免 undefined.then 抛 TypeError
+        if (!this.resourceStore) { this.notify('资源存储不可用'); return; }
+        this.resourceStore.put(file, { name: file.name, type: file.type }).then(resource => {
           if (!resource) throw new Error('资源存储不可用');
           if (this._disposed || !this.page) return; // 存储完成前画布已释放，丢弃
           el.dataset.resourceId = resource.id;

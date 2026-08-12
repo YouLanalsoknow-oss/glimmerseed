@@ -34,6 +34,7 @@ export class MeshEditController {
     this._toastRestoreText = null;
     this._toastTimer = 0;
     this._selectionSig = ''; // 选中高亮层重建签名缓存（P: 未变化时跳过重建）
+    this._scheduleDrag = null; // 顶点拖拽 rAF 合并调度器
   }
 
   init(renderer, viewport, sceneManager, transformController) {
@@ -46,6 +47,7 @@ export class MeshEditController {
     renderer.domElement.addEventListener('pointercancel', this._cancel);
     this._offSelection = sceneManager.on('selectionchange', () => this._syncTarget());
     this._scheduleHover = schedule(() => { if (this._lastHoverEvent) this._updateHover(this._lastHoverEvent); });
+    this._scheduleDrag = schedule(() => this._flushVertexDrag());
     return this;
   }
 
@@ -191,7 +193,7 @@ export class MeshEditController {
         if (vertexHit) {
           this.session.select(vertexHit.index, event.shiftKey);
           this.session.beginGesture();
-          this._drag = { index: vertexHit.index, x: event.clientX, y: event.clientY, before: this._captureTopology() };
+          this._drag = { index: vertexHit.index, x: event.clientX, y: event.clientY, dx: 0, dy: 0, before: this._captureTopology() };
           this._disableOrbit(event.pointerId);
           hit = true;
         } else { this._setStatus('未命中顶点：请放大模型或开启框选模式'); }
@@ -208,16 +210,11 @@ export class MeshEditController {
     if (this._drag?.type === 'box') { this._updateBoxVisual(event); return; }
     if (this._drag) {
       if (this.mode !== 'vertex') return;
-      const dx = event.clientX - this._drag.x;
-      const dy = event.clientY - this._drag.y;
-      const factor = this._pixelToWorldFactor();
-      // 复用预分配 Vector3，避免每帧新建临时对象
-      const right = this._rightTemp.setFromMatrixColumn(this.viewport.camera.matrixWorld, 0);
-      const up = this._upTemp.setFromMatrixColumn(this.viewport.camera.matrixWorld, 1);
-      const delta = right.multiplyScalar(dx * factor).add(up.multiplyScalar(-dy * factor));
-      this.session.moveVertices(delta);
+      // 高频 pointermove 只累加位移并调度到 rAF 帧内执行，避免每帧同步 moveVertices + overlay 重建
+      this._drag.dx += event.clientX - this._drag.x;
+      this._drag.dy += event.clientY - this._drag.y;
       this._drag.x = event.clientX; this._drag.y = event.clientY;
-      this._updateOverlayPositions();
+      this._scheduleDrag?.();
       return;
     }
     // 悬停拾取合并到 rAF 帧内执行，避免 pointermove 每帧全量射线求交
@@ -289,7 +286,12 @@ export class MeshEditController {
     }
     this._removeBoxVisual();
     const wasVertexDrag = this._drag && this.mode === 'vertex';
-    if (wasVertexDrag) this._renderOverlay();
+    if (wasVertexDrag) {
+      // 提交前冲刷 rAF 中尚未执行的位移，避免快速点击拖拽丢失最后一段移动
+      this._scheduleDrag?.cancel();
+      this._flushVertexDrag();
+      this._renderOverlay();
+    }
     this._enableOrbit(event.pointerId);
     this.session?.endGesture();
     if (wasVertexDrag) this._syncGeometry(this._drag.before);
@@ -301,6 +303,11 @@ export class MeshEditController {
     this._removeBoxVisual();
     this._enableOrbit(event?.pointerId);
     const wasVertexDrag = this._drag && this.mode === 'vertex';
+    if (wasVertexDrag) {
+      // 与 _onUp 一致：cancel 前冲刷未执行的位移，保证已拖动的顶点被提交
+      this._scheduleDrag?.cancel();
+      this._flushVertexDrag();
+    }
     this.session?.endGesture();
     // 顶点坐标已随拖拽写入 mesh 几何，cancel 时同样提交，与 _onUp 保持一致，避免编辑丢失且不可撤销
     if (wasVertexDrag) this._syncGeometry(this._drag?.before);
@@ -407,8 +414,8 @@ export class MeshEditController {
     if (!report) return null;
     const status = document.getElementById('statusMode');
     if (status) status.textContent = report.valid
-      ? `拓扑正常 · ${report.counts.triangles} 三角面`
-      : `拓扑问题 · ${report.issues.length} 项`;
+      ? `拓扑正常 · ${report.counts?.triangles ?? 0} 三角面`
+      : `拓扑问题 · ${(report.issues || []).length} 项`;
     this._diagnostic = report;
     this._renderOverlay();
     return report;
@@ -697,6 +704,23 @@ export class MeshEditController {
     return positions;
   }
 
+  /** rAF 帧内执行顶点拖拽位移：用累加的 dx/dy 计算世界位移并移动选中顶点，随后轻量更新覆盖层 */
+  _flushVertexDrag() {
+    const drag = this._drag;
+    if (!drag || this.mode !== 'vertex') return;
+    const dx = drag.dx || 0;
+    const dy = drag.dy || 0;
+    if (!dx && !dy) return;
+    drag.dx = 0; drag.dy = 0;
+    const factor = this._pixelToWorldFactor();
+    // 复用预分配 Vector3，避免每帧新建临时对象
+    const right = this._rightTemp.setFromMatrixColumn(this.viewport.camera.matrixWorld, 0);
+    const up = this._upTemp.setFromMatrixColumn(this.viewport.camera.matrixWorld, 1);
+    const delta = right.multiplyScalar(dx * factor).add(up.multiplyScalar(-dy * factor));
+    this.session.moveVertices(delta);
+    this._updateOverlayPositions();
+  }
+
   /** 拖拽期间轻量更新 — 仅刷新已有几何体的 position 属性，不重建对象 */
   _updateOverlayPositions() {
     if (!this.session) return;
@@ -747,6 +771,8 @@ export class MeshEditController {
     this._toastTimer = 0;
     this._scheduleHover?.cancel();
     this._scheduleHover = null;
+    this._scheduleDrag?.cancel();
+    this._scheduleDrag = null;
     this._lastHoverEvent = null;
     this._clearOverlay(); this._removeBoxVisual(); this.transformController?.setTopologyEditing(false);
     this._offSelection?.(); this._offSelection = null;

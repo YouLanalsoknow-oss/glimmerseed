@@ -6,19 +6,19 @@
  * @returns {Function} throttled 可调用调度函数；附带 .cancel() 取消尚未执行的调度
  */
 export function schedule(fn) {
-  let rafId = 0;
+  let rafId = null;
   const run = () => {
-    rafId = 0;
+    rafId = null;
     fn();
   };
   const cancel = () => {
-    if (rafId) {
+    if (rafId != null) {
       cancelAnimationFrame(rafId);
-      rafId = 0;
+      rafId = null;
     }
   };
   const throttled = () => {
-    if (rafId) return;
+    if (rafId != null) return;
     rafId = requestAnimationFrame(run);
   };
   throttled.cancel = cancel;

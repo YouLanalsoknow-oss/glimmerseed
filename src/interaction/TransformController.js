@@ -16,6 +16,7 @@ export class TransformController {
     this._box = null;
     this._topologyEditing = false;
     this._transformBefore = null;
+    this._dragTargetId = null;
     this._dragListener = null;
     this._objectChangeListener = null;
   }
@@ -40,13 +41,18 @@ export class TransformController {
       if (event.value && mesh?.userData?.sceneObjectId) {
         const object = this.sceneManager.getObject(mesh.userData.sceneObjectId);
         this._transformBefore = object ? clone(object.data) : null;
+        // 捕获本次拖拽的目标对象 id：dragend 时若选中对象已切换，丢弃 before 防止 A 的旧数据写回 B
+        this._dragTargetId = mesh.userData.sceneObjectId;
       } else if (!event.value && this._transformBefore && mesh?.userData?.sceneObjectId) {
-        const object = this.sceneManager.getObject(mesh.userData.sceneObjectId);
-        if (object) {
-          const after = clone(object.data);
-          this.sceneManager.pushCommand(new UpdateObjectCommand(this.sceneManager, mesh.userData.sceneObjectId, this._transformBefore, after));
+        if (mesh.userData.sceneObjectId === this._dragTargetId) {
+          const object = this.sceneManager.getObject(mesh.userData.sceneObjectId);
+          if (object) {
+            const after = clone(object.data);
+            this.sceneManager.pushCommand(new UpdateObjectCommand(this.sceneManager, mesh.userData.sceneObjectId, this._transformBefore, after));
+          }
         }
         this._transformBefore = null;
+        this._dragTargetId = null;
       }
     };
     this.controls.addEventListener('dragging-changed', this._dragListener);

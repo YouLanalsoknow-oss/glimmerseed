@@ -11,7 +11,7 @@ export function createEmitter() {
       return () => listeners.get(event)?.delete(cb);
     },
     emit(event, data) {
-      listeners.get(event)?.forEach(cb => { try { cb(data); } catch (e) { console.error(e); } });
+      listeners.get(event)?.forEach(cb => { try { cb(data); } catch (e) { console.error('[events]', event, e); } });
     },
     clear() {
       listeners.clear();

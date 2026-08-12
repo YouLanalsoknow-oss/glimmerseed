@@ -284,7 +284,9 @@ export class BookmarkBar {
   }
 
   _executeAction(action) {
-    const [type, value] = action.split(':');
+    // action 缺失/非字符串时兜底，避免 undefined.split 抛 TypeError
+    const [type, value] = String(action || '').split(':');
+    if (!type) return;
     switch (type) {
       case 'create': this.createObject(value); break;
       case 'mode':
@@ -417,7 +419,12 @@ export class BookmarkBar {
         const source = sourceResources.find(item => item.name === file.name);
         const data = { name: file.name.replace(/\.[^.]+$/, ''), sourceResourceId: source?.id || '', sourceName: file.name, sourceType: file.type || '', sourceResources };
         const id = this.sceneManager.addExternalObject(object, data);
-        if (!id) { this.canvasRuntime.notify(`导入失败：对象 id 冲突`); return; }
+        if (!id) {
+          // 对象未入场景：释放其几何/材质/纹理，避免 GPU 资源泄漏
+          object.traverse?.(node => this.sceneManager._disposeNode(node, () => true));
+          this.canvasRuntime.notify(`导入失败：对象 id 冲突`);
+          return;
+        }
         data.id = id;
         this.sceneManager.pushCommand(new AddExternalObjectCommand(this.sceneManager, object, data));
         this.sceneManager.selectObject(id);
